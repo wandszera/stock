@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stock Flow</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-kicker">Controle operacional</span>
+        <h1>Stock Flow</h1>
+        <p>Centro de operacao para estoque, vendas e contagens com visao consolidada da rotina da loja.</p>
+      </div>
+
+      <form id="login-form" class="panel form-panel">
+        <h2>Login</h2>
+        <label>
+          Email
+          <input id="email" type="email" placeholder="admin@empresa.com" required>
+        </label>
+        <label>
+          Senha
+          <input id="password" type="password" placeholder="********" required>
+        </label>
+        <button type="submit">Entrar</button>
+        <p id="login-status" class="status muted">Entre com um usuario operacional ja cadastrado na API.</p>
+      </form>
+
+      <section class="panel workflow-panel">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow">Modo guiado</span>
+            <h2>Escolha a tarefa principal</h2>
+          </div>
+        </div>
+        <div class="workflow-switcher">
+          <button type="button" class="ghost workflow-tab" data-workspace="receive">Receber</button>
+          <button type="button" class="ghost workflow-tab" data-workspace="sell">Vender</button>
+          <button type="button" class="ghost workflow-tab" data-workspace="count">Contar</button>
+          <button type="button" class="ghost workflow-tab" data-workspace="transfer">Transferir</button>
+          <button type="button" class="ghost workflow-tab" data-workspace="adjust">Ajustar</button>
+        </div>
+        <div id="workspace-helper" class="inline-card workspace-helper">
+          Escolha uma tarefa para focar em um fluxo por vez.
+        </div>
+      </section>
+
+      <section class="workspace-stack">
+        <div class="workspace-panel" data-workspace-panel="receive">
+          <form id="entry-form" class="panel form-panel">
+            <div class="workflow-intro">
+              <span class="eyebrow">Receber</span>
+              <p>Registre entradas, revise documentos e acompanhe rascunhos sem competir com outros fluxos.</p>
+            </div>
+            <h2>Recebimento de estoque</h2>
+            <label>
+              Loja
+              <select id="entry-store" required></select>
+            </label>
+            <div class="inline-grid">
+              <label>
+                Fornecedor
+                <input id="entry-supplier-reference" type="text" placeholder="Fornecedor, CD ou origem interna">
+              </label>
+              <label>
+                Documento
+                <input id="entry-document-reference" type="text" placeholder="NF, pedido, romaneio ou protocolo">
+              </label>
+            </div>
+            <div id="entry-items" class="stack-list"></div>
+            <label>
+              Motivo
+              <input id="entry-reason" type="text" placeholder="recebimento validado na operacao" required>
+            </label>
+            <label>
+              Observacoes de conferencia
+              <textarea id="entry-notes" rows="3" placeholder="Registre conferencia, divergencias e observacoes relevantes do recebimento"></textarea>
+            </label>
+            <div class="reference-suggestions-panel">
+              <div class="panel-head compact">
+                <h3>Referencias recentes</h3>
+              </div>
+              <div id="entry-reference-suggestions" class="stack-list compact-list">
+                <div class="inline-card empty-state">Os ultimos recebimentos referenciados aparecerao aqui.</div>
+              </div>
+            </div>
+            <div id="entry-preview" class="inline-card empty-state">
+              Selecione loja e itens para revisar o saldo projetado antes de registrar a entrada.
+            </div>
+            <div class="action-row">
+              <button id="add-entry-item" type="button" class="ghost">Adicionar item</button>
+              <button id="save-entry-draft" type="button" class="ghost">Salvar rascunho</button>
+              <button id="cancel-entry-edit" type="button" class="ghost">Cancelar edicao</button>
+              <button type="submit">Registrar recebimento</button>
+            </div>
+            <p id="entry-status" class="status muted">Use para entradas manuais, recebimentos de fornecedor e regularizacoes operacionais.</p>
+          </form>
+        </div>
+
+        <div class="workspace-panel" data-workspace-panel="sell">
+          <form id="sale-form" class="panel form-panel">
+            <div class="workflow-intro">
+              <span class="eyebrow">Vender</span>
+              <p>Monte a venda, valide o saldo e conclua a operacao com menos distrações ao redor.</p>
+            </div>
+            <h2>Venda da loja</h2>
+            <label>
+              Loja
+              <select id="sale-store" required></select>
+            </label>
+            <label>
+              Desconto
+              <input id="sale-discount" type="number" min="0" step="0.01" value="0">
+            </label>
+            <div id="sale-items" class="stack-list"></div>
+            <div id="sale-summary" class="inline-card empty-state">
+              Selecione loja e itens para revisar subtotal, desconto e alertas de saldo antes de concluir.
+            </div>
+            <div class="action-row">
+              <button id="add-sale-item" type="button" class="ghost">Adicionar item</button>
+              <button type="submit">Concluir venda</button>
+            </div>
+            <p id="sale-form-status" class="status muted">Monte os itens, revise o saldo e conclua a venda quando a conferencia estiver pronta.</p>
+          </form>
+        </div>
+
+        <div class="workspace-panel" data-workspace-panel="count">
+          <form id="count-form" class="panel form-panel">
+            <div class="workflow-intro">
+              <span class="eyebrow">Contar</span>
+              <p>Abra uma contagem, registre o item auditado e feche a execucao quando terminar.</p>
+            </div>
+            <h2>Contagem de estoque</h2>
+            <label>
+              Loja
+              <select id="count-store" required></select>
+            </label>
+            <label>
+              Escopo
+              <input id="count-scope" type="text" value="cycle" placeholder="cycle, spot-check, inventario" required>
+            </label>
+            <label>
+              Motivo
+              <input id="count-reason" type="text" placeholder="contagem semanal, inventario ou auditoria">
+            </label>
+            <label>
+              Variante
+              <select id="count-variant" required></select>
+            </label>
+            <div id="count-preview" class="inline-card empty-state">
+              Selecione loja, variante e quantidade para ver o saldo atual e a diferenca prevista.
+            </div>
+            <label>
+              Quantidade contada
+              <input id="count-quantity" type="number" min="0" value="0" required>
+            </label>
+            <div class="action-row">
+              <button type="submit">Abrir e registrar item</button>
+              <button id="close-count-button" type="button" class="ghost">Fechar contagem ativa</button>
+            </div>
+            <p id="count-status" class="status muted">Abra uma contagem, registre itens auditados e feche a execucao quando concluir.</p>
+          </form>
+        </div>
+
+        <div class="workspace-panel" data-workspace-panel="transfer">
+          <form id="transfer-form" class="panel form-panel">
+            <div class="workflow-intro">
+              <span class="eyebrow">Transferir</span>
+              <p>Mova saldo entre lojas quando a operacao exigir redistribuicao entre origem e destino.</p>
+            </div>
+            <h2>Transferencia entre lojas</h2>
+            <label>
+              Loja origem
+              <select id="transfer-source-store" required></select>
+            </label>
+            <label>
+              Loja destino
+              <select id="transfer-destination-store" required></select>
+            </label>
+            <label>
+              Variante
+              <select id="transfer-variant" required></select>
+            </label>
+            <label>
+              Quantidade
+              <input id="transfer-quantity" type="number" min="1" placeholder="1" required>
+            </label>
+            <div id="transfer-preview" class="inline-card empty-state">
+              Selecione origem, destino e variante para ver o saldo antes da transferencia.
+            </div>
+            <div class="action-row">
+              <button id="use-current-store-transfer" type="button" class="ghost">Usar loja atual na origem</button>
+              <button id="swap-transfer-stores" type="button" class="ghost">Inverter lojas</button>
+            </div>
+            <label>
+              Motivo
+              <input id="transfer-reason" type="text" placeholder="reposicao entre lojas">
+            </label>
+            <button type="submit">Transferir estoque</button>
+            <p id="transfer-status" class="status muted">Use para reposicao entre lojas quando houver acesso a origem e destino.</p>
+          </form>
+        </div>
+
+        <div class="workspace-panel" data-workspace-panel="adjust">
+          <form id="adjustment-form" class="panel form-panel">
+            <div class="workflow-intro">
+              <span class="eyebrow">Ajustar</span>
+              <p>Corrija o saldo sistemico apenas quando a validacao operacional ja tiver sido concluida.</p>
+            </div>
+            <h2>Ajuste de saldo</h2>
+            <label>
+              Loja
+              <select id="adjustment-store" required></select>
+            </label>
+            <label>
+              Variante
+              <select id="adjustment-variant" required></select>
+            </label>
+            <label>
+              Novo saldo
+              <input id="adjustment-quantity" type="number" min="0" value="0" required>
+            </label>
+            <label>
+              Motivo
+              <input id="adjustment-reason" type="text" placeholder="ajuste operacional confirmado" required>
+            </label>
+            <div id="adjustment-preview" class="inline-card empty-state">
+              Selecione loja e variante para revisar o saldo atual antes de aplicar o ajuste.
+            </div>
+            <button type="submit">Aplicar ajuste</button>
+            <p id="adjustment-status" class="status muted">Use para corrigir o saldo sistemico depois de validacao operacional.</p>
+          </form>
+        </div>
+      </section>
+
+      <div class="panel">
+        <h2>Consultar e analisar</h2>
+        <p class="panel-copy">Use estes atalhos quando precisar sair da tarefa atual para consultar historico, saldos ou indicadores.</p>
+        <div class="shortcut-list">
+          <button class="ghost" data-load="products" data-target="products-list">Catalogo</button>
+          <button class="ghost" data-load="variants" data-target="variants-list">Variantes</button>
+          <button class="ghost" data-load="balances" data-target="balances-list">Saldo atual</button>
+          <button class="ghost" data-load="movements" data-target="movements-list">Fluxo operacional</button>
+          <button class="ghost" data-target="sales-list">Historico de vendas</button>
+          <button class="ghost" data-target="receipt-report-list">Relatorio documental</button>
+        </div>
+        <div class="action-row">
+          <button id="use-current-store-sale" type="button" class="ghost">Usar loja atual na venda</button>
+          <button id="use-current-store-count" type="button" class="ghost">Usar loja atual na contagem</button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div>
+          <span class="eyebrow">Painel operacional</span>
+          <h2>Operacao diaria com contexto, metricas e execucao no mesmo fluxo</h2>
+          <p>Acompanhe saude da API, desempenho recente, movimentacoes e acoes operacionais em uma interface unica e mais pronta para uso real.</p>
+        </div>
+        <div class="hero-card">
+          <div class="metric">
+            <span>API</span>
+            <strong id="health-status">verificando...</strong>
+          </div>
+          <div class="metric">
+            <span>Sessao</span>
+            <strong id="session-status">desconectada</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel section-nav-panel">
+        <div class="section-nav">
+          <button class="ghost section-link" data-target="dashboard-section">Visao geral</button>
+          <button class="ghost section-link" data-target="operations-section">Operacao</button>
+          <button class="ghost section-link" data-target="sales-section">Comercial</button>
+          <button class="ghost section-link" data-target="catalog-section">Catalogo e analise</button>
+          <button class="ghost section-link" data-target="admin-section">Admin</button>
+        </div>
+      </section>
+
+      <section id="executive-strip" class="executive-strip"></section>
+
+      <section id="dashboard-section" class="analytics-grid">
+        <section class="panel analytics-panel wide">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Dashboard</span>
+              <h2>Resumo da operacao</h2>
+            </div>
+            <div class="dashboard-controls">
+              <label>
+                Janela
+                <select id="dashboard-days">
+                  <option value="7">7 dias</option>
+                  <option value="14">14 dias</option>
+                  <option value="30">30 dias</option>
+                </select>
+              </label>
+              <label>
+                Top itens
+                <select id="dashboard-top-limit">
+                  <option value="5">Top 5</option>
+                  <option value="10">Top 10</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div id="dashboard-summary" class="summary-grid"></div>
+        </section>
+
+        <section class="panel analytics-panel">
+          <div class="panel-head">
+            <h2>Vendas por dia</h2>
+            <span id="daily-sales-count" class="chip">0</span>
+          </div>
+          <div id="daily-sales-chart" class="chart"></div>
+        </section>
+
+        <section class="panel analytics-panel">
+          <div class="panel-head">
+            <h2>Top variantes</h2>
+            <span id="top-variants-count" class="chip">0</span>
+          </div>
+          <div id="top-variants-list" class="list"></div>
+        </section>
+      </section>
+
+      <section id="admin-section" class="admin-section" hidden>
+        <section class="panel data-panel wide">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Administracao</span>
+              <h2>Painel admin</h2>
+            </div>
+            <span id="admin-role-chip" class="chip">admin</span>
+          </div>
+          <div id="admin-summary" class="summary-grid admin-summary-grid"></div>
+        </section>
+
+        <div class="admin-grid">
+          <section class="panel data-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Criar usuario</h2>
+                <span class="eyebrow">Acesso e permissao</span>
+              </div>
+            </div>
+            <form id="admin-user-form" class="form-panel compact-form">
+              <label>
+                Nome
+                <input id="admin-user-name" type="text" placeholder="Nome completo" required>
+              </label>
+              <label>
+                Email
+                <input id="admin-user-email" type="email" placeholder="usuario@empresa.com" required>
+              </label>
+              <label>
+                Senha
+                <input id="admin-user-password" type="password" placeholder="Minimo de 8 caracteres" required>
+              </label>
+              <label>
+                Perfil
+                <select id="admin-user-role" required>
+                  <option value="operator">Operator</option>
+                  <option value="manager">Manager</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </label>
+              <label>
+                Loja vinculada
+                <select id="admin-user-store">
+                  <option value="">Sem vinculo fixo</option>
+                </select>
+              </label>
+              <button type="submit">Criar usuario</button>
+              <p id="admin-user-status" class="status muted">Crie acessos operacionais e administrativos sem sair do painel.</p>
+            </form>
+          </section>
+
+          <section class="panel data-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Criar loja</h2>
+                <span class="eyebrow">Estrutura da operacao</span>
+              </div>
+            </div>
+            <form id="admin-store-form" class="form-panel compact-form">
+              <label>
+                Nome da loja
+                <input id="admin-store-name" type="text" placeholder="Ex.: Loja Jardins" required>
+              </label>
+              <label>
+                Timezone
+                <input id="admin-store-timezone" type="text" value="America/Sao_Paulo" required>
+              </label>
+              <label class="inline-check">
+                <input id="admin-store-active" type="checkbox" checked>
+                <span>Loja ativa</span>
+              </label>
+              <button type="submit">Criar loja</button>
+              <p id="admin-store-status" class="status muted">Cadastre novas lojas antes de distribuir usuarios e operacoes.</p>
+            </form>
+          </section>
+        </div>
+
+        <div class="admin-grid">
+          <section class="panel data-panel">
+            <div class="panel-head">
+              <h2>Usuarios</h2>
+              <span id="admin-users-count" class="chip">0</span>
+            </div>
+            <div id="admin-users-list" class="list"></div>
+          </section>
+
+          <section class="panel data-panel">
+            <div class="panel-head">
+              <h2>Lojas</h2>
+              <span id="admin-stores-count" class="chip">0</span>
+            </div>
+            <div id="admin-stores-list" class="list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="operations-section" class="workspace">
+        <section class="panel data-panel wide">
+          <div class="panel-head">
+            <div>
+              <h2>Rascunhos pendentes</h2>
+              <span class="eyebrow">Fila rapida de recebimentos em aberto</span>
+            </div>
+            <span id="draft-receipts-count" class="chip">0</span>
+          </div>
+          <div class="action-row">
+            <input id="draft-receipts-query" type="text" placeholder="Buscar fornecedor ou documento">
+            <label class="inline-check">
+              <input id="draft-receipts-sensitive-only" type="checkbox">
+              <span>Somente sensiveis</span>
+            </label>
+            <select id="draft-receipts-sort">
+              <option value="date_desc">Mais recentes</option>
+              <option value="date_asc">Mais antigos</option>
+              <option value="sla_desc">SLA mais urgente</option>
+              <option value="quantity_desc">Maior quantidade</option>
+              <option value="supplier_asc">Fornecedor A-Z</option>
+            </select>
+            <button id="show-critical-drafts" type="button" class="ghost">Ver criticos</button>
+            <button id="bulk-approve-drafts" type="button" class="ghost">Aprovar selecionados</button>
+            <button id="bulk-post-drafts" type="button" class="ghost">Efetivar selecionados</button>
+            <button id="bulk-discard-drafts" type="button" class="ghost">Descartar selecionados</button>
+          </div>
+          <div id="draft-receipts-list" class="list"></div>
+          <div class="pager">
+            <button id="drafts-prev-page" type="button" class="ghost">Pagina anterior</button>
+            <span id="drafts-page-status" class="pager-status">Pagina 1</span>
+            <button id="drafts-next-page" type="button" class="ghost">Proxima pagina</button>
+          </div>
+        </section>
+
+        <section class="panel data-panel wide">
+          <div class="panel-head">
+            <div>
+              <h2>Relatorio documental</h2>
+              <span class="eyebrow">Totais por status e fornecedor</span>
+            </div>
+          </div>
+          <div class="filter-section analytic-section">
+            <div class="eyebrow">Analise documental</div>
+            <div class="action-row analytic-controls">
+              <input id="receipt-report-query" type="text" placeholder="Buscar fornecedor ou documento no relatorio">
+              <input id="receipt-report-date-from" type="date" aria-label="Relatorio desde">
+              <input id="receipt-report-date-to" type="date" aria-label="Relatorio ate">
+              <label class="inline-check">
+                <input id="receipt-report-sensitive-only" type="checkbox">
+                <span>Somente sensiveis</span>
+              </label>
+              <select id="receipt-report-sort">
+                <option value="receipts_desc">Mais documentos</option>
+                <option value="quantity_desc">Maior quantidade</option>
+                <option value="approval_desc">Mais pendencias de aprovacao</option>
+                <option value="status_asc">Status A-Z</option>
+                <option value="supplier_asc">Fornecedor A-Z</option>
+              </select>
+              <button id="print-receipt-report-button" type="button" class="ghost">Imprimir relatorio</button>
+              <button id="export-receipt-report-button" type="button" class="ghost">Exportar relatorio CSV</button>
+            </div>
+          </div>
+          <div id="receipt-report-list" class="list"></div>
+          <div class="pager">
+            <button id="receipt-report-prev-page" type="button" class="ghost">Pagina anterior</button>
+            <span id="receipt-report-page-status" class="pager-status">Pagina 1</span>
+            <button id="receipt-report-next-page" type="button" class="ghost">Proxima pagina</button>
+          </div>
+        </section>
+
+        <div class="panel filters">
+          <div class="panel-head">
+            <h2>Consulta</h2>
+            <button id="logout-button" class="ghost">Limpar sessao</button>
+          </div>
+          <div class="filter-section">
+            <div class="eyebrow">Catalogo e escopo</div>
+            <div class="filter-grid">
+              <label>
+                Loja do painel
+                <select id="store-filter">
+                  <option value="">Todas / minha loja</option>
+                </select>
+              </label>
+              <label>
+                Produto
+                <input id="product-query" type="text" placeholder="Nome do produto ou familia">
+              </label>
+              <label>
+                SKU
+                <input id="sku-query" type="text" placeholder="SKU ou referencia interna">
+              </label>
+              <label>
+                Barcode
+                <input id="barcode-query" type="text" placeholder="Codigo de barras ou EAN">
+              </label>
+            </div>
+          </div>
+          <div class="filter-section">
+            <div class="eyebrow">Operacao e recebimentos</div>
+            <div class="filter-grid">
+              <label>
+                Tipo de movimento
+                <input id="movement-type-query" type="text" placeholder="sale, transfer_out, count_adjustment...">
+              </label>
+              <label>
+                Fornecedor
+                <input id="movement-supplier-query" type="text" placeholder="Fornecedor, CD ou origem do recebimento">
+              </label>
+              <label>
+                Documento
+                <input id="movement-document-query" type="text" placeholder="NF, pedido, romaneio ou protocolo">
+              </label>
+              <label>
+                Status recebimento
+                <select id="receipt-status-query">
+                  <option value="">Todos</option>
+                  <option value="draft">Rascunho</option>
+                  <option value="posted">Postado</option>
+                  <option value="checked">Conferido</option>
+                  <option value="canceled">Cancelado</option>
+                </select>
+              </label>
+              <label>
+                Movimentos desde
+                <input id="movement-date-from" type="date">
+              </label>
+              <label>
+                Movimentos ate
+                <input id="movement-date-to" type="date">
+              </label>
+            </div>
+          </div>
+          <div class="action-row">
+            <button id="refresh-button" type="button">Atualizar painel</button>
+            <button id="export-movements-button" type="button" class="ghost">Exportar CSV</button>
+          </div>
+          <div id="operation-context" class="inline-card empty-state">
+            Selecione uma loja no painel para ver o contexto operacional consolidado desta sessao.
+          </div>
+        </div>
+
+        <div id="sales-section" class="sales-layout">
+          <section class="panel data-panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Vendas</span>
+                <h2>Historico recente</h2>
+              </div>
+              <span id="sales-count" class="chip">0</span>
+            </div>
+            <div class="filter-grid compact">
+              <label>
+                Buscar SKU
+                <input id="sales-variant-query" type="text" placeholder="SKU ou nome do produto">
+              </label>
+              <label>
+                Status
+                <select id="sales-status-query">
+                  <option value="">Todos</option>
+                  <option value="completed">Concluidas</option>
+                  <option value="canceled">Canceladas</option>
+                </select>
+              </label>
+              <label>
+                Vendas desde
+                <input id="sales-date-from" type="date">
+              </label>
+              <label>
+                Vendas ate
+                <input id="sales-date-to" type="date">
+              </label>
+            </div>
+            <div id="sales-list" class="list"></div>
+            <div class="pager">
+              <button id="sales-prev-page" type="button" class="ghost">Pagina anterior</button>
+              <span id="sales-page-status" class="pager-status">Pagina 1</span>
+              <button id="sales-next-page" type="button" class="ghost">Proxima pagina</button>
+            </div>
+          </section>
+
+          <section class="panel data-panel detail-panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Detalhe</span>
+                <h2>Venda selecionada</h2>
+              </div>
+            </div>
+            <div id="sale-detail" class="sale-detail empty-state">
+              Selecione uma venda para ver itens, valores e status.
+            </div>
+            <p id="sales-status" class="status muted">Cancelamento disponivel para perfis com permissao na API.</p>
+          </section>
+        </div>
+
+        <div id="catalog-section" class="grid">
+          <section class="panel data-panel wide">
+            <div class="panel-head">
+              <div>
+                <h2>Recebimentos</h2>
+                <span class="eyebrow">Agrupado por referencia</span>
+              </div>
+              <span id="receipts-count" class="chip">0</span>
+            </div>
+            <div class="sales-layout">
+              <div id="receipts-list" class="list"></div>
+              <div id="receipt-detail" class="sale-detail empty-state">
+                Selecione um recebimento para ver fornecedor, documento e itens recebidos.
+              </div>
+            </div>
+            <div class="pager">
+              <button id="receipts-prev-page" type="button" class="ghost">Pagina anterior</button>
+              <span id="receipts-page-status" class="pager-status">Pagina 1</span>
+              <button id="receipts-next-page" type="button" class="ghost">Proxima pagina</button>
+            </div>
+            <div class="action-row">
+              <button id="load-receipt-into-entry" type="button" class="ghost">Carregar no formulario</button>
+              <select id="receipt-audit-filter">
+                <option value="">Toda auditoria</option>
+                <option value="draft_created">Rascunho criado</option>
+                <option value="draft_updated">Rascunho atualizado</option>
+                <option value="draft_approved">Rascunho aprovado</option>
+                <option value="bulk_post_confirmed">Bulk confirmado</option>
+                <option value="draft_posted">Rascunho efetivado</option>
+                <option value="status_updated">Status atualizado</option>
+                <option value="receipt_canceled">Recebimento cancelado</option>
+                <option value="direct_receipt_created">Recebimento direto</option>
+                <option value="batch_receipt_created">Recebimento em lote</option>
+              </select>
+              <button id="print-receipt-button" type="button" class="ghost">Imprimir resumo</button>
+              <button id="export-receipt-button" type="button" class="ghost">Exportar recebimento CSV</button>
+            </div>
+          </section>
+
+          <section class="panel data-panel wide">
+            <div class="panel-head">
+              <h2>Contagens</h2>
+              <span id="counts-count" class="chip">0</span>
+            </div>
+            <div id="counts-list" class="list"></div>
+          </section>
+
+          <section class="panel data-panel">
+            <div class="panel-head">
+              <h2>Produtos</h2>
+              <span id="products-count" class="chip">0</span>
+            </div>
+            <div id="products-list" class="list"></div>
+          </section>
+
+          <section class="panel data-panel">
+            <div class="panel-head">
+              <h2>Variantes</h2>
+              <span id="variants-count" class="chip">0</span>
+            </div>
+            <div id="variants-list" class="list"></div>
+          </section>
+
+          <section class="panel data-panel">
+            <div class="panel-head">
+              <h2>Saldos</h2>
+              <span id="balances-count" class="chip">0</span>
+            </div>
+            <div id="balances-list" class="list"></div>
+          </section>
+
+          <section class="panel data-panel wide">
+            <div class="panel-head">
+              <h2>Movimentos</h2>
+              <span id="movements-count" class="chip">0</span>
+            </div>
+            <div id="movements-list" class="list"></div>
+            <div class="pager">
+              <button id="movements-prev-page" type="button" class="ghost">Pagina anterior</button>
+              <span id="movements-page-status" class="pager-status">Pagina 1</span>
+              <button id="movements-next-page" type="button" class="ghost">Proxima pagina</button>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    window.STOCK_API_URL = window.STOCK_API_URL || "http://127.0.0.1:8000";
+  </script>
+  <script src="./app.js"></script>
+</body>
+</html>
