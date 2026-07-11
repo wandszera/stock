@@ -1,98 +1,98 @@
-# Stock Flow - Sistema de Estoque
+# Stock Flow - Inventory System
 
-Stock Flow é uma solução integrada de gerenciamento de estoque, vendas, recebimentos e analytics. O projeto possui uma arquitetura dividida em uma API robusta construída com **FastAPI** (Python) e um painel de controle interativo desenvolvido em **HTML, CSS e JavaScript puros** (Vanilla JS).
-
----
-
-## 🚀 Funcionalidades Principais
-
-*   **Painel Geral (Dashboard):** Visão geral operacional, resumos analíticos e contexto em tempo real do estoque.
-*   **Gestão de Inventário:** Fluxos de transferência, ajuste, recebimento, venda e contagem física de mercadorias.
-*   **Gestão de Recebimentos:** Cadastro manual com múltiplos itens, rascunhos com fluxo de salvamento, aprovação/descarte e efetivação.
-*   **Relatório Documental:** Histórico de movimentações com busca textual por fornecedor/documento, filtros por período, paginação ponta a ponta, exportação para CSV e impressão de resumos.
-*   **Análise de Risco de Fornecedor:** Painel dedicado com histórico de conformidade por fornecedor, permitindo impressão e exportação.
-*   **Modo Demonstrativo:** O frontend pode ser explorado sem autenticação ou API rodando, operando a partir de simulações com dados locais.
+Stock Flow is an integrated solution for inventory management, sales, receipts, and analytics. The project features a split architecture with a robust API built with **FastAPI** (Python) and an interactive dashboard developed in **HTML, CSS, and plain JavaScript** (Vanilla JS).
 
 ---
 
-## 🛠️ Tecnologias Utilizadas
+## 🚀 Key Features
+
+*   **General Dashboard:** Operational overview, analytical summaries, and real-time inventory context.
+*   **Inventory Management:** Flows for transfer, adjustment, receipt, sale, and physical counting of goods.
+*   **Receipts Management:** Manual registration with multiple items, drafts with a save flow, approval/discard, and execution.
+*   **Documental Report:** Movement history with textual search by supplier/document, filters by period, end-to-end pagination, CSV export, and summary printing.
+*   **Supplier Risk Analysis:** Dedicated dashboard with compliance history per supplier, allowing printing and export.
+*   **Demo Mode:** The frontend can be explored without authentication or a running API, operating based on simulations with local data.
+
+---
+
+## 🛠️ Technologies Used
 
 ### Backend
 *   **Python 3.10+**
-*   **FastAPI:** Framework web assíncrono para construção da API.
-*   **SQLAlchemy / Alembic:** ORM e controle de migrações de banco de dados.
-*   **Uvicorn:** Servidor ASGI de alta performance.
-*   **Pytest:** Suíte de testes automatizados unitários e de integração.
-*   **SQLite:** Banco de dados padrão local (`stock.db`).
+*   **FastAPI:** Asynchronous web framework for building the API.
+*   **SQLAlchemy / Alembic:** ORM and database migrations control.
+*   **Uvicorn:** High-performance ASGI server.
+*   **Pytest:** Automated unit and integration testing suite.
+*   **SQLite:** Default local database (`stock.db`).
 
 ### Frontend
-*   **HTML5 / Vanilla CSS:** Layout moderno, responsivo e estilizado sem frameworks adicionais.
-*   **Vanilla JavaScript (ES6):** Controle de estado, manipulação do DOM e integrações de API de forma nativa.
+*   **HTML5 / Vanilla CSS:** Modern, responsive layout styled without additional frameworks.
+*   **Vanilla JavaScript (ES6):** State control, DOM manipulation, and API integrations natively.
 
 ---
 
-## 📂 Estrutura de Pastas do Projeto
+## 📂 Project Folder Structure
 
 ```text
 stock/
 ├── backend/
-│   ├── app/                 # Código-fonte da aplicação FastAPI
-│   │   ├── api/             # Rotas e controladores da API
-│   │   ├── core/            # Configurações globais e segurança
-│   │   ├── models/          # Modelos de dados SQLAlchemy
-│   │   ├── schemas/         # Esquemas de validação Pydantic
-│   │   ├── static/          # Arquivos estáticos adicionais
-│   │   └── main.py          # Ponto de entrada do backend FastAPI
-│   ├── migrations/          # Scripts de migração do banco de dados (Alembic)
-│   ├── tests/               # Testes automatizados (pytest)
-│   ├── .env                 # Arquivo de variáveis de ambiente
-│   ├── alembic.ini          # Configuração do Alembic
-│   ├── requirements.txt     # Dependências Python
-│   └── stock.db             # Banco de dados local SQLite (gerado automaticamente)
+│   ├── app/                 # FastAPI application source code
+│   │   ├── api/             # API routes and controllers
+│   │   ├── core/            # Global configurations and security
+│   │   ├── models/          # SQLAlchemy data models
+│   │   ├── schemas/         # Pydantic validation schemas
+│   │   ├── static/          # Additional static files
+│   │   └── main.py          # FastAPI backend entry point
+│   ├── migrations/          # Database migration scripts (Alembic)
+│   ├── tests/               # Automated tests (pytest)
+│   ├── .env                 # Environment variables file
+│   ├── alembic.ini          # Alembic configuration
+│   ├── requirements.txt     # Python dependencies
+│   └── stock.db             # Local SQLite database (auto-generated)
 ├── frontend/
-│   ├── index.html           # Layout markup da interface
-│   ├── styles.css           # Estilos visuais do painel
-│   ├── app.js               # Lógica de estados, renderização e conexões de API
-│   └── README.md            # Documentação dedicada do frontend
-├── .gitignore               # Configurações de arquivos ignorados pelo Git
-└── pytest.ini               # Configurações globais do pytest
+│   ├── index.html           # Interface markup layout
+│   ├── styles.css           # Dashboard visual styles
+│   ├── app.js               # State logic, rendering, and API connections
+│   └── README.md            # Dedicated frontend documentation
+├── .gitignore               # Git ignored files configuration
+└── pytest.ini               # Global pytest configurations
 ```
 
 ---
 
-## ⚙️ Instalação e Execução
+## ⚙️ Installation and Execution
 
-### Pré-requisitos
-*   Python 3.10 ou superior instalado.
+### Prerequisites
+*   Python 3.10 or higher installed.
 
-### Passo 1: Configurar o Backend
+### Step 1: Set up the Backend
 
-1.  Navegue até a pasta `backend`:
+1.  Navigate to the `backend` folder:
     ```bash
     cd backend
     ```
 
-2.  Crie um ambiente virtual Python:
+2.  Create a Python virtual environment:
     ```bash
     python -m venv env
     ```
 
-3.  Ative o ambiente virtual:
-    *   **No Windows (PowerShell):**
+3.  Activate the virtual environment:
+    *   **On Windows (PowerShell):**
         ```powershell
         .\env\Scripts\Activate.ps1
         ```
-    *   **No Linux/macOS:**
+    *   **On Linux/macOS:**
         ```bash
         source env/bin/activate
         ```
 
-4.  Instale as dependências necessárias:
+4.  Install the required dependencies:
     ```bash
     pip install -r requirements.txt
     ```
 
-5.  Configure o arquivo `.env` com base no padrão:
+5.  Configure the `.env` file based on the standard:
     ```ini
     DATABASE_URL=sqlite:///./stock.db
     BACKEND_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173
@@ -101,31 +101,31 @@ stock/
     ALGORITHM=HS256
     ```
 
-6.  Execute o servidor FastAPI com recarregamento dinâmico (live reload):
+6.  Run the FastAPI server with live reload:
     ```bash
     uvicorn app.main:app --reload
     ```
 
-O backend estará ativo em `http://127.0.0.1:8000`. A documentação interativa da API poderá ser acessada em `http://127.0.0.1:8000/docs`.
+The backend will be active at `http://127.0.0.1:8000`. The interactive API documentation can be accessed at `http://127.0.0.1:8000/docs`.
 
 ---
 
-### Passo 2: Executar o Frontend
+### Step 2: Run the Frontend
 
-O backend já monta e serve o frontend automaticamente na rota `/app`. 
+The backend already mounts and serves the frontend automatically on the `/app` route.
 
-*   Acesse o painel completo acessando: **`http://127.0.0.1:8000/app/index.html`** (ou apenas **`http://127.0.0.1:8000/app/`**).
+*   Access the complete dashboard by going to: **`http://127.0.0.1:8000/app/index.html`** (or just **`http://127.0.0.1:8000/app/`**).
 
-Alternativamente, a pasta `frontend` pode ser servida de forma independente por qualquer servidor estático de arquivos (como Live Server do VS Code, nginx, ou rodando `python -m http.server 3000` dentro da pasta `frontend`). 
-Se o frontend rodar isolado em outra porta, você poderá ajustar o endpoint da API definindo `window.STOCK_API_URL` antes de carregar o script `app.js` no arquivo HTML.
+Alternatively, the `frontend` folder can be served independently by any static file server (like Live Server in VS Code, nginx, or by running `python -m http.server 3000` inside the `frontend` folder).
+If the frontend runs isolated on another port, you can adjust the API endpoint by setting `window.STOCK_API_URL` before loading the `app.js` script in the HTML file.
 
 ---
 
-## 🧪 Executando os Testes Automatizados
+## 🧪 Running Automated Tests
 
-O projeto conta com testes automatizados cobrindo tanto a lógica do backend quanto a integração e contratos com o frontend.
+The project has automated tests covering both the backend logic and the integration and contracts with the frontend.
 
-Para rodar todos os testes, certifique-se de que o ambiente virtual está ativado, posicione-se no diretório raiz do projeto e execute:
+To run all tests, ensure the virtual environment is activated, navigate to the project's root directory, and execute:
 
 ```bash
 pytest
@@ -133,6 +133,6 @@ pytest
 
 ---
 
-## 📝 Contrato e Desenvolvimento
+## 📝 Contract and Development
 
-- Qualquer alteração nos IDs, strings ou endpoints que afetem a comunicação do frontend com a API deve ser acompanhada de atualizações nos testes localizados em `backend/tests/test_frontend.py` e `backend/tests/test_inventory_and_sales.py`.
+- Any changes to IDs, strings, or endpoints that affect the frontend's communication with the API must be accompanied by updates in the tests located at `backend/tests/test_frontend.py` and `backend/tests/test_inventory_and_sales.py`.
