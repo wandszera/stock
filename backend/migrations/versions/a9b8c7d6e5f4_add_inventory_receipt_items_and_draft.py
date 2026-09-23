@@ -6,6 +6,7 @@ Create Date: 2026-04-20 23:10:00.000000
 
 """
 from typing import Sequence, Union
+import uuid
 
 from alembic import op
 import sqlalchemy as sa
@@ -32,23 +33,37 @@ def upgrade() -> None:
 
     op.execute(sa.text("UPDATE inventory_receipts SET status = 'posted' WHERE status IS NULL OR status = ''"))
 
-    op.execute(
+    connection = op.get_bind()
+    movements = connection.execute(
         sa.text(
             """
-            INSERT INTO inventory_receipt_items (id, receipt_id, variant_id, quantity, created_at)
-            SELECT
-                gen_random_uuid(),
-                receipt_group_id,
-                variant_id,
-                quantity_delta,
-                created_at
+            SELECT receipt_group_id, variant_id, quantity_delta, created_at
             FROM stock_movements
             WHERE receipt_group_id IS NOT NULL
               AND movement_type = 'entry'
               AND quantity_delta > 0
             """
         )
+    ).mappings()
+    insert_item = sa.text(
+        """
+        INSERT INTO inventory_receipt_items (id, receipt_id, variant_id, quantity, created_at)
+        VALUES (:id, :receipt_id, :variant_id, :quantity, :created_at)
+        """
     )
+    is_sqlite = connection.dialect.name == "sqlite"
+    for movement in movements:
+        item_id = str(uuid.uuid4()) if is_sqlite else uuid.uuid4()
+        connection.execute(
+            insert_item,
+            {
+                "id": item_id,
+                "receipt_id": movement["receipt_group_id"],
+                "variant_id": movement["variant_id"],
+                "quantity": movement["quantity_delta"],
+                "created_at": movement["created_at"],
+            },
+        )
 
 
 def downgrade() -> None:

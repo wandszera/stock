@@ -26,6 +26,7 @@ class StockMovementResponse(BaseModel):
     document_reference: str | None
     reason: str | None
     created_by: uuid.UUID | None
+    request_id: str | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

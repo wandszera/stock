@@ -2244,3 +2244,152 @@ def test_movements_filter_respects_store_scope_for_non_admin(
     )
 
     assert forbidden_response.status_code == 403
+
+
+def test_sale_idempotency_key_prevents_duplicate_stock_mutation(
+    client, db_session, auth_headers, store_factory, stock_factory
+):
+    store = store_factory("Loja Venda Idempotente")
+    variant, _ = stock_factory(store_id=store.id, on_hand_qty=5)
+    headers = auth_headers("operator@idempotente.com", "secret123", "operator", store_id=store.id)
+    headers["Idempotency-Key"] = "sale-checkout-001"
+    payload = {
+        "store_id": str(store.id),
+        "items": [{"variant_id": str(variant.id), "quantity": 2, "unit_price": "20.00"}],
+    }
+
+    first = client.post("/sales/", headers=headers, json=payload)
+    replay = client.post("/sales/", headers=headers, json=payload)
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json()["id"] == first.json()["id"]
+    db_session.expire_all()
+    balance = db_session.query(InventoryBalance).filter_by(
+        store_id=store.id, variant_id=variant.id
+    ).one()
+    assert balance.on_hand_qty == 3
+    assert db_session.query(Sale).count() == 1
+    assert db_session.query(StockMovement).filter_by(reference_type="sale").count() == 1
+
+
+def test_sale_idempotency_key_rejects_a_different_payload(
+    client, db_session, auth_headers, store_factory, stock_factory
+):
+    store = store_factory("Loja Chave Reutilizada")
+    variant, _ = stock_factory(store_id=store.id, on_hand_qty=8)
+    headers = auth_headers("operator@chave.com", "secret123", "operator", store_id=store.id)
+    headers["Idempotency-Key"] = "sale-checkout-002"
+
+    first = client.post(
+        "/sales/",
+        headers=headers,
+        json={
+            "store_id": str(store.id),
+            "items": [{"variant_id": str(variant.id), "quantity": 2, "unit_price": "20.00"}],
+        },
+    )
+    conflicting = client.post(
+        "/sales/",
+        headers=headers,
+        json={
+            "store_id": str(store.id),
+            "items": [{"variant_id": str(variant.id), "quantity": 3, "unit_price": "20.00"}],
+        },
+    )
+
+    assert first.status_code == 200
+    assert conflicting.status_code == 409
+    db_session.expire_all()
+    balance = db_session.query(InventoryBalance).filter_by(
+        store_id=store.id, variant_id=variant.id
+    ).one()
+    assert balance.on_hand_qty == 6
+
+
+def test_sale_aggregates_repeated_variant_before_checking_stock(
+    client, db_session, auth_headers, store_factory, stock_factory
+):
+    store = store_factory("Loja Linhas Repetidas")
+    variant, _ = stock_factory(store_id=store.id, on_hand_qty=5)
+    headers = auth_headers("operator@repetida.com", "secret123", "operator", store_id=store.id)
+
+    response = client.post(
+        "/sales/",
+        headers=headers,
+        json={
+            "store_id": str(store.id),
+            "items": [
+                {"variant_id": str(variant.id), "quantity": 3, "unit_price": "20.00"},
+                {"variant_id": str(variant.id), "quantity": 3, "unit_price": "20.00"},
+            ],
+        },
+    )
+
+    assert response.status_code == 409
+    db_session.expire_all()
+    balance = db_session.query(InventoryBalance).filter_by(
+        store_id=store.id, variant_id=variant.id
+    ).one()
+    assert balance.on_hand_qty == 5
+    assert db_session.query(Sale).count() == 0
+    assert db_session.query(StockMovement).count() == 0
+
+
+def test_batch_receipt_idempotency_key_prevents_duplicate_entry(
+    client, db_session, auth_headers, store_factory, stock_factory
+):
+    store = store_factory("Loja Recebimento Idempotente")
+    variant, _ = stock_factory(store_id=store.id, on_hand_qty=5)
+    headers = auth_headers("operator@recebimento.com", "secret123", "operator", store_id=store.id)
+    headers["Idempotency-Key"] = "receipt-import-001"
+    payload = {
+        "store_id": str(store.id),
+        "document_reference": "NF-1001",
+        "items": [{"variant_id": str(variant.id), "quantity": 2}],
+    }
+
+    first = client.post("/inventory/entries", headers=headers, json=payload)
+    replay = client.post("/inventory/entries", headers=headers, json=payload)
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    db_session.expire_all()
+    balance = db_session.query(InventoryBalance).filter_by(
+        store_id=store.id, variant_id=variant.id
+    ).one()
+    assert balance.on_hand_qty == 7
+    assert db_session.query(InventoryReceipt).count() == 1
+    assert db_session.query(StockMovement).filter_by(reference_type="batch_entry").count() == 1
+
+
+def test_failed_transfer_rolls_back_created_destination_balance_and_ledger(
+    client, db_session, auth_headers, store_factory, stock_factory
+):
+    source = store_factory("Origem sem saldo")
+    destination = store_factory("Destino sem saldo")
+    variant, _ = stock_factory(store_id=source.id, on_hand_qty=1)
+    headers = auth_headers("admin@rollback.com", "secret123", "admin")
+
+    response = client.post(
+        "/inventory/transfer",
+        headers=headers,
+        json={
+            "source_store_id": str(source.id),
+            "destination_store_id": str(destination.id),
+            "variant_id": str(variant.id),
+            "quantity": 2,
+        },
+    )
+
+    assert response.status_code == 409
+    db_session.expire_all()
+    source_balance = db_session.query(InventoryBalance).filter_by(
+        store_id=source.id, variant_id=variant.id
+    ).one()
+    destination_balance = db_session.query(InventoryBalance).filter_by(
+        store_id=destination.id, variant_id=variant.id
+    ).first()
+    assert source_balance.on_hand_qty == 1
+    assert destination_balance is None
+    assert db_session.query(StockMovement).count() == 0

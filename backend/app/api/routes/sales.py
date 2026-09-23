@@ -2,24 +2,45 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
 from app.core.security import ensure_store_access, get_current_user, require_roles
-from app.models.inventory import InventoryBalance, StockMovement
+from app.models.inventory import StockMovement
 from app.models.product import Product, ProductVariant
 from app.models.sale import Sale, SaleItem
 from app.models.user import User
 from app.schemas.sale import SaleCreate, SaleListResponse, SaleResponse, SaleReturnCreate
+from app.services.inventory import StockConflictError, change_stock, lock_inventory_balance
+from app.services.audit import record_audit_event
 
 router = APIRouter(prefix="/sales", tags=["sales"])
 
 
 def build_sales_query(db: Session):
     return db.query(Sale).options(selectinload(Sale.items))
+
+
+def sale_matches_idempotent_request(sale: Sale, payload: SaleCreate) -> bool:
+    persisted_items = sorted(
+        (str(item.variant_id), item.quantity, Decimal(item.unit_price)) for item in sale.items
+    )
+    requested_items = sorted(
+        (str(item.variant_id), item.quantity, Decimal(item.unit_price)) for item in payload.items
+    )
+    return sale.discount_amount == payload.discount_amount and persisted_items == requested_items
+
+
+def return_idempotent_sale(sale: Sale, payload: SaleCreate) -> Sale:
+    if not sale_matches_idempotent_request(sale, payload):
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency-Key ja foi usado com uma venda diferente.",
+        )
+    return sale
 
 
 @router.get("/", response_model=SaleListResponse)
@@ -80,6 +101,7 @@ def list_sales(
 @router.post("/", response_model=SaleResponse)
 def create_sale(
     payload: SaleCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("admin", "manager", "operator")),
 ):
@@ -89,29 +111,32 @@ def create_sale(
         raise HTTPException(status_code=400, detail="A venda precisa ter pelo menos um item.")
 
     ensure_store_access(current_user, payload.store_id)
+    if idempotency_key is not None:
+        idempotency_key = idempotency_key.strip()
+        if not idempotency_key or len(idempotency_key) > 120:
+            raise HTTPException(status_code=400, detail="Idempotency-Key deve ter entre 1 e 120 caracteres.")
+        existing_sale = (
+            build_sales_query(db)
+            .filter(Sale.store_id == payload.store_id, Sale.idempotency_key == idempotency_key)
+            .first()
+        )
+        if existing_sale:
+            return return_idempotent_sale(existing_sale, payload)
+
     sale: Sale | None = None
 
     try:
-        balances: dict[uuid.UUID, InventoryBalance] = {}
-
+        requested_by_variant: dict[uuid.UUID, int] = {}
         for item in payload.items:
-            balance = db.execute(
-                select(InventoryBalance)
-                .where(
-                    InventoryBalance.store_id == payload.store_id,
-                    InventoryBalance.variant_id == item.variant_id,
-                )
-                .with_for_update()
-            ).scalar_one_or_none()
-
-            if not balance or balance.on_hand_qty < item.quantity:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Estoque insuficiente para {item.variant_id}",
-                )
-
-            balances[item.variant_id] = balance
+            requested_by_variant[item.variant_id] = (
+                requested_by_variant.get(item.variant_id, 0) + item.quantity
+            )
             total_amount += item.quantity * item.unit_price
+
+        for variant_id in sorted(requested_by_variant, key=str):
+            balance = lock_inventory_balance(db, payload.store_id, variant_id)
+            if balance.on_hand_qty < requested_by_variant[variant_id]:
+                raise StockConflictError(f"Estoque insuficiente para {variant_id}.")
 
         final_amount = total_amount - payload.discount_amount
         if final_amount < 0:
@@ -126,13 +151,12 @@ def create_sale(
             status="completed",
             total_amount=final_amount,
             discount_amount=payload.discount_amount,
+            idempotency_key=idempotency_key,
         )
         db.add(sale)
         db.flush()
 
         for item in payload.items:
-            balances[item.variant_id].on_hand_qty -= item.quantity
-
             db.add(
                 SaleItem(
                     sale_id=sale.id,
@@ -142,25 +166,49 @@ def create_sale(
                     line_total=item.quantity * item.unit_price,
                 )
             )
-            db.add(
-                StockMovement(
-                    store_id=payload.store_id,
-                    variant_id=item.variant_id,
-                    movement_type="sale",
-                    quantity_delta=-item.quantity,
-                    reference_type="sale",
-                    reference_id=sale.id,
-                    reason="sale_completed",
-                    created_by=current_user.id,
-                )
+            change_stock(
+                db,
+                store_id=payload.store_id,
+                variant_id=item.variant_id,
+                quantity_delta=-item.quantity,
+                movement_type="sale",
+                reference_type="sale",
+                reference_id=sale.id,
+                reason="sale_completed",
+                created_by=current_user.id,
             )
+
+        record_audit_event(
+            db,
+            action="sale.created",
+            entity_type="sale",
+            entity_id=sale.id,
+            store_id=payload.store_id,
+            actor_id=current_user.id,
+            metadata={
+                "item_count": len(payload.items),
+                "total_quantity": sum(item.quantity for item in payload.items),
+                "total_amount": str(final_amount),
+            },
+        )
 
         db.commit()
     except HTTPException:
         db.rollback()
         raise
+    except StockConflictError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except IntegrityError:
         db.rollback()
+        if idempotency_key:
+            existing_sale = (
+                build_sales_query(db)
+                .filter(Sale.store_id == payload.store_id, Sale.idempotency_key == idempotency_key)
+                .first()
+            )
+            if existing_sale:
+                return return_idempotent_sale(existing_sale, payload)
         raise HTTPException(
             status_code=400,
             detail="Loja, usuario ou variante informado nao foi encontrado.",
@@ -216,40 +264,35 @@ def cancel_sale(
         items = db.query(SaleItem).filter(SaleItem.sale_id == sale.id).all()
 
         for item in items:
-            balance = db.execute(
-                select(InventoryBalance)
-                .where(
-                    InventoryBalance.store_id == sale.store_id,
-                    InventoryBalance.variant_id == item.variant_id,
-                )
-                .with_for_update()
-            ).scalar_one_or_none()
-
-            if not balance:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Saldo nao encontrado para estornar a venda.",
-                )
-
-            balance.on_hand_qty += item.quantity
-            db.add(
-                StockMovement(
-                    store_id=sale.store_id,
-                    variant_id=item.variant_id,
-                    movement_type="reversal",
-                    quantity_delta=item.quantity,
-                    reference_type="sale_cancel",
-                    reference_id=sale.id,
-                    reason="sale_canceled",
-                    created_by=current_user.id,
-                )
+            change_stock(
+                db,
+                store_id=sale.store_id,
+                variant_id=item.variant_id,
+                quantity_delta=item.quantity,
+                movement_type="reversal",
+                reference_type="sale_cancel",
+                reference_id=sale.id,
+                reason="sale_canceled",
+                created_by=current_user.id,
             )
 
         sale.status = "canceled"
+        record_audit_event(
+            db,
+            action="sale.canceled",
+            entity_type="sale",
+            entity_id=sale.id,
+            store_id=sale.store_id,
+            actor_id=current_user.id,
+            metadata={"item_count": len(items)},
+        )
         db.commit()
     except HTTPException:
         db.rollback()
         raise
+    except StockConflictError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=400, detail="Nao foi possivel cancelar a venda.") from None
@@ -290,63 +333,69 @@ def return_sale_items(
             for item in db.query(SaleItem).filter(SaleItem.sale_id == sale.id).all()
         }
 
+        requested_returns: dict[uuid.UUID, int] = {}
         for return_item in payload.items:
-            sale_item = sale_items.get(return_item.variant_id)
+            requested_returns[return_item.variant_id] = (
+                requested_returns.get(return_item.variant_id, 0) + return_item.quantity
+            )
+
+        for variant_id in sorted(requested_returns, key=str):
+            requested_quantity = requested_returns[variant_id]
+            sale_item = sale_items.get(variant_id)
             if sale_item is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Variante {return_item.variant_id} nao pertence a esta venda.",
+                    detail=f"Variante {variant_id} nao pertence a esta venda.",
                 )
 
             returned_qty = db.execute(
                 select(func.coalesce(func.sum(StockMovement.quantity_delta), 0)).where(
                     StockMovement.store_id == sale.store_id,
-                    StockMovement.variant_id == return_item.variant_id,
+                    StockMovement.variant_id == variant_id,
                     StockMovement.reference_type == "sale_return",
                     StockMovement.reference_id == sale.id,
                 )
             ).scalar_one()
 
             available_to_return = sale_item.quantity - int(returned_qty or 0)
-            if return_item.quantity > available_to_return:
+            if requested_quantity > available_to_return:
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Quantidade de devolucao maior que o disponivel para {return_item.variant_id}.",
+                    detail=f"Quantidade de devolucao maior que o disponivel para {variant_id}.",
                 )
 
-            balance = db.execute(
-                select(InventoryBalance)
-                .where(
-                    InventoryBalance.store_id == sale.store_id,
-                    InventoryBalance.variant_id == return_item.variant_id,
-                )
-                .with_for_update()
-            ).scalar_one_or_none()
-
-            if not balance:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Saldo nao encontrado para processar a devolucao.",
-                )
-
-            balance.on_hand_qty += return_item.quantity
-            db.add(
-                StockMovement(
-                    store_id=sale.store_id,
-                    variant_id=return_item.variant_id,
-                    movement_type="return",
-                    quantity_delta=return_item.quantity,
-                    reference_type="sale_return",
-                    reference_id=sale.id,
-                    reason="sale_item_returned",
-                    created_by=current_user.id,
-                )
+            change_stock(
+                db,
+                store_id=sale.store_id,
+                variant_id=variant_id,
+                quantity_delta=requested_quantity,
+                movement_type="return",
+                reference_type="sale_return",
+                reference_id=sale.id,
+                reason="sale_item_returned",
+                created_by=current_user.id,
             )
+
+        record_audit_event(
+            db,
+            action="sale.items_returned",
+            entity_type="sale",
+            entity_id=sale.id,
+            store_id=sale.store_id,
+            actor_id=current_user.id,
+            metadata={
+                "variant_count": len(requested_returns),
+                "total_quantity": sum(requested_returns.values()),
+            },
+        )
 
         db.commit()
     except HTTPException:
         db.rollback()
         raise
+    except StockConflictError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=400, detail="Nao foi possivel processar a devolucao.") from None

@@ -6,6 +6,7 @@ def test_frontend_route_is_served_from_separate_folder(client):
     assert "Stock Flow" in response.text
     assert "./styles.css" in response.text
     assert "./app.js" in response.text
+    assert 'type="module"' in response.text
     assert "Recebimento de estoque" in response.text
     assert "Transferencia entre lojas" in response.text
     assert "Ajuste de saldo" in response.text
@@ -58,6 +59,13 @@ def test_health_endpoint_is_still_served(client):
     assert response.json() == {"status": "ok"}
 
 
+def test_readiness_endpoint_checks_database(client):
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
 def test_frontend_javascript_exposes_demo_receipt_and_report_flows(client):
     response = client.get("/app/app.js")
 
@@ -72,3 +80,13 @@ def test_frontend_javascript_exposes_demo_receipt_and_report_flows(client):
     assert "relatorio-recebimentos-demo.csv" in response.text
     assert 'apiFetch("/users/")' in response.text
     assert 'apiFetch("/stores/")' in response.text
+    assert '"Idempotency-Key"' in response.text
+
+
+def test_frontend_serves_shared_document_utilities(client):
+    response = client.get("/app/modules/document-utils.js")
+
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+    assert "export function downloadCsv" in response.text
+    assert "export function buildPrintHtmlDocument" in response.text

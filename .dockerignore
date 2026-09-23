@@ -1,0 +1,11 @@
+.git
+.github
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+backend/env
+backend/.env
+backend/*.db
+backend/tests
+htmlcov
+.coverage

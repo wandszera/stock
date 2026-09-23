@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import ensure_store_access, get_current_user, require_roles
-from app.models.inventory import InventoryBalance, StockMovement
+from app.models.inventory import InventoryBalance
 from app.models.inventory_count import InventoryCount, InventoryCountItem
 from app.models.user import User
 from app.schemas.inventory_count import (
@@ -16,6 +16,8 @@ from app.schemas.inventory_count import (
     InventoryCountItemCreate,
     InventoryCountResponse,
 )
+from app.services.inventory import lock_inventory_balances, set_stock_quantity
+from app.services.audit import record_audit_event
 
 router = APIRouter(prefix="/counts", tags=["counts"])
 
@@ -35,6 +37,16 @@ def create_inventory_count(
         created_by=current_user.id,
     )
     db.add(count)
+    db.flush()
+    record_audit_event(
+        db,
+        action="inventory_count.created",
+        entity_type="inventory_count",
+        entity_id=count.id,
+        store_id=count.store_id,
+        actor_id=current_user.id,
+        metadata={"scope": count.scope},
+    )
     db.commit()
     db.refresh(count)
     return count
@@ -47,7 +59,9 @@ def upsert_inventory_count_item(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("admin", "manager")),
 ):
-    count = db.query(InventoryCount).filter(InventoryCount.id == count_id).first()
+    count = db.execute(
+        select(InventoryCount).where(InventoryCount.id == count_id).with_for_update()
+    ).scalar_one_or_none()
     if not count:
         raise HTTPException(status_code=404, detail="Contagem nao encontrada")
     if count.status != "open":
@@ -89,6 +103,20 @@ def upsert_inventory_count_item(
         )
         db.add(item)
 
+    record_audit_event(
+        db,
+        action="inventory_count.item_recorded",
+        entity_type="inventory_count",
+        entity_id=count.id,
+        store_id=count.store_id,
+        actor_id=current_user.id,
+        metadata={
+            "variant_id": str(payload.variant_id),
+            "system_quantity": system_quantity,
+            "counted_quantity": payload.counted_quantity,
+            "difference_quantity": difference_quantity,
+        },
+    )
     db.commit()
     db.refresh(count)
     return count
@@ -100,7 +128,9 @@ def close_inventory_count(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("admin", "manager")),
 ):
-    count = db.query(InventoryCount).filter(InventoryCount.id == count_id).first()
+    count = db.execute(
+        select(InventoryCount).where(InventoryCount.id == count_id).with_for_update()
+    ).scalar_one_or_none()
     if not count:
         raise HTTPException(status_code=404, detail="Contagem nao encontrada")
     if count.status != "open":
@@ -115,45 +145,40 @@ def close_inventory_count(
         if not items:
             raise HTTPException(status_code=400, detail="A contagem nao possui itens")
 
+        lock_inventory_balances(
+            db,
+            [(count.store_id, item.variant_id) for item in items],
+            create_if_missing=True,
+        )
         for item in items:
-            balance = db.execute(
-                select(InventoryBalance)
-                .where(
-                    InventoryBalance.store_id == count.store_id,
-                    InventoryBalance.variant_id == item.variant_id,
-                )
-                .with_for_update()
-            ).scalar_one_or_none()
-
-            if balance is None:
-                balance = InventoryBalance(
-                    store_id=count.store_id,
-                    variant_id=item.variant_id,
-                    on_hand_qty=0,
-                    reserved_qty=0,
-                )
-                db.add(balance)
-                db.flush()
-
-            delta = item.counted_quantity - balance.on_hand_qty
-            if delta != 0:
-                balance.on_hand_qty = item.counted_quantity
-                db.add(
-                    StockMovement(
-                        store_id=count.store_id,
-                        variant_id=item.variant_id,
-                        movement_type="adjustment",
-                        quantity_delta=delta,
-                        reference_type="inventory_count",
-                        reference_id=count.id,
-                        reason="inventory_count_closed",
-                        created_by=current_user.id,
-                    )
-                )
+            set_stock_quantity(
+                db,
+                store_id=count.store_id,
+                variant_id=item.variant_id,
+                quantity=item.counted_quantity,
+                reference_type="inventory_count",
+                reference_id=count.id,
+                reason="inventory_count_closed",
+                created_by=current_user.id,
+            )
 
         count.status = "closed"
         count.closed_by = current_user.id
         count.closed_at = datetime.now(timezone.utc)
+        record_audit_event(
+            db,
+            action="inventory_count.closed",
+            entity_type="inventory_count",
+            entity_id=count.id,
+            store_id=count.store_id,
+            actor_id=current_user.id,
+            metadata={
+                "item_count": len(items),
+                "adjusted_item_count": sum(
+                    1 for item in items if item.counted_quantity != item.system_quantity
+                ),
+            },
+        )
         db.commit()
     except IntegrityError:
         db.rollback()

@@ -50,7 +50,17 @@
   supplierRiskTargets: [],
   supplierRiskHistory: [],
   adminUsers: [],
+  pendingSaleIdempotencyKey: null,
+  pendingEntryIdempotencyKey: null,
 };
+
+import {
+  buildCsvRows,
+  buildPrintHtmlDocument,
+  downloadBlob,
+  downloadCsv,
+  openPrintDocument,
+} from "./modules/document-utils.js";
 
 const API_BASE_URL = (window.STOCK_API_URL || window.location.origin || "").replace(/\/$/, "");
 
@@ -670,29 +680,6 @@ function buildDemoReceiptReport() {
   return Array.from(groups.values());
 }
 
-function downloadCsv(filename, rows) {
-  const csv = rows.map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
-  downloadBlob(filename, new Blob([csv], { type: "text/csv;charset=utf-8;" }));
-}
-
-function buildCsvRows(headers, items, mapRow) {
-  return [
-    headers,
-    ...items.map((item, index) => mapRow(item, index)),
-  ];
-}
-
-function downloadBlob(filename, blob) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
 async function exportCsvFromApi({
   path,
   filename,
@@ -722,58 +709,6 @@ async function exportCsvFromApi({
     setStatusMessage(onError, "error");
     return false;
   }
-}
-
-function openPrintDocument(content, options = {}) {
-  const { width = 900, height = 700 } = options;
-  const printWindow = window.open("", "_blank", `width=${width},height=${height}`);
-  if (!printWindow) {
-    return null;
-  }
-  printWindow.document.write(content);
-  printWindow.document.close();
-  printWindow.focus();
-  printWindow.print();
-  return printWindow;
-}
-
-function buildPrintStyles(options = {}) {
-  const {
-    margin = 24,
-    color = "#1a1a1a",
-    headingMargin = "0 0 12px",
-    tableMarginTop = 20,
-    borderColor = "#ccc",
-    headerBackground = "#f3f3f3",
-    paragraphColor = "",
-    listMarginTop = 10,
-    listPaddingLeft = 20,
-  } = options;
-  const paragraphStyle = paragraphColor ? `p { margin: 4px 0; color: ${paragraphColor}; }` : "p { margin: 4px 0; }";
-  return `
-    body { font-family: Arial, sans-serif; margin: ${margin}px; color: ${color}; }
-    h1 { margin: ${headingMargin}; }
-    h2 { margin: 0 0 10px; }
-    ${paragraphStyle}
-    table { width: 100%; border-collapse: collapse; margin-top: ${tableMarginTop}px; }
-    th, td { border: 1px solid ${borderColor}; padding: 10px; text-align: left; }
-    th { background: ${headerBackground}; }
-    ul { margin-top: ${listMarginTop}px; padding-left: ${listPaddingLeft}px; }
-  `;
-}
-
-function buildPrintHtmlDocument(title, body, styleOptions = {}) {
-  return `
-    <!DOCTYPE html>
-    <html lang="pt-BR">
-      <head>
-        <meta charset="UTF-8">
-        <title>${title}</title>
-        <style>${buildPrintStyles(styleOptions)}</style>
-      </head>
-      <body>${body}</body>
-    </html>
-  `;
 }
 
 function buildReceiptSummaryPrintBody(data, rows, approvalHistory, heading) {
@@ -929,6 +864,14 @@ function formatCurrency(value) {
     style: "currency",
     currency: "BRL",
   });
+}
+
+function getOperationIdempotencyKey(stateField) {
+  if (!state[stateField]) {
+    state[stateField] = window.crypto?.randomUUID?.()
+      || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+  return state[stateField];
 }
 
 function buildVariantOptionLabel(variant, suffix = "") {
@@ -1484,6 +1427,16 @@ function renderEntryPreview() {
     <div class="preview-grid">
       <div>
         <strong>Itens no recebimento</strong>
+        <span>${payload.items.filter((item) => item.variant_id).length} variantes, ${totals} unidades</span>
+      </div>
+      <div>
+        <strong>Saldos projetados</strong>
+        ${impacted}
+      </div>
+    </div>
+  `;
+}
+
 function applyReceiptReference(reference) {
   elements.entrySupplierReference.value = reference.supplier_reference || "";
   elements.entryDocumentReference.value = reference.document_reference || "";
@@ -2813,7 +2766,10 @@ async function handleCreateSale(event) {
   try {
     const response = await apiFetch("/sales/", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": getOperationIdempotencyKey("pendingSaleIdempotencyKey"),
+      },
       body: JSON.stringify(payload),
     });
     const data = await response.json();
@@ -2823,6 +2779,7 @@ async function handleCreateSale(event) {
     }
 
     state.selectedSaleId = data.id;
+    state.pendingSaleIdempotencyKey = null;
     elements.saleForm.reset();
     elements.saleItems.innerHTML = "";
     elements.saleItems.appendChild(createSaleItemRow());
@@ -2985,7 +2942,10 @@ async function handleEntry(event) {
   try {
     const response = await apiFetch("/inventory/entries", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": getOperationIdempotencyKey("pendingEntryIdempotencyKey"),
+      },
       body: JSON.stringify(payload),
     });
     const data = await response.json();
@@ -2995,6 +2955,7 @@ async function handleEntry(event) {
     }
 
     const totalUnits = payload.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    state.pendingEntryIdempotencyKey = null;
     setEntryStatus(`Recebimento em lote concluido com ${payload.items.length} variantes e ${totalUnits} unidades registradas.`, "success");
     elements.entryForm.reset();
     elements.entryItems.innerHTML = "";

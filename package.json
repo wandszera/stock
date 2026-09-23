@@ -1,0 +1,8 @@
+{
+  "name": "stock-flow-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check frontend/app.js && node --check frontend/modules/document-utils.js"
+  }
+}

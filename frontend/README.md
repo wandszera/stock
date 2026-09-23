@@ -37,6 +37,7 @@ O backend tambem serve a interface em `/app/`, com `index.html`, `styles.css` e 
 - [index.html](C:/Users/wand/Desktop/projetos_pessoais/stock/frontend/index.html): markup principal da interface.
 - [styles.css](C:/Users/wand/Desktop/projetos_pessoais/stock/frontend/styles.css): estilos do painel.
 - [app.js](C:/Users/wand/Desktop/projetos_pessoais/stock/frontend/app.js): estado da aplicacao, chamadas de API, modo demo, renderizacao, exportacoes e impressoes.
+- `modules/document-utils.js`: utilitarios compartilhados para CSV, downloads e documentos de impressao.
 
 ## Integracao com a API
 

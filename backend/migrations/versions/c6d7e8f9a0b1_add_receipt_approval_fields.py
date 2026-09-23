@@ -18,18 +18,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("inventory_receipts", sa.Column("requires_approval", sa.Boolean(), nullable=False, server_default=sa.false()))
-    op.add_column("inventory_receipts", sa.Column("approved_by", sa.UUID(), nullable=True))
-    op.create_foreign_key(
-        "fk_inventory_receipts_approved_by_users",
-        "inventory_receipts",
-        "users",
-        ["approved_by"],
-        ["id"],
-    )
+    with op.batch_alter_table("inventory_receipts") as batch_op:
+        batch_op.add_column(
+            sa.Column("requires_approval", sa.Boolean(), nullable=False, server_default=sa.false())
+        )
+        batch_op.add_column(sa.Column("approved_by", sa.UUID(), nullable=True))
+        batch_op.create_foreign_key(
+            "fk_inventory_receipts_approved_by_users",
+            "users",
+            ["approved_by"],
+            ["id"],
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_inventory_receipts_approved_by_users", "inventory_receipts", type_="foreignkey")
-    op.drop_column("inventory_receipts", "approved_by")
-    op.drop_column("inventory_receipts", "requires_approval")
+    with op.batch_alter_table("inventory_receipts") as batch_op:
+        batch_op.drop_constraint("fk_inventory_receipts_approved_by_users", type_="foreignkey")
+        batch_op.drop_column("approved_by")
+        batch_op.drop_column("requires_approval")

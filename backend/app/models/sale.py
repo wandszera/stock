@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,6 +11,9 @@ from app.models.base import Base
 
 class Sale(Base):
     __tablename__ = "sales"
+    __table_args__ = (
+        UniqueConstraint("store_id", "idempotency_key", name="uq_sale_store_idempotency_key"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -24,6 +27,7 @@ class Sale(Base):
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="completed")
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     sold_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

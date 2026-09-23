@@ -21,6 +21,24 @@ from app.models.inventory import (
     StockMovement,
 )
 from app.models.user import User
+from app.services.inventory import (
+    ALLOWED_RECEIPT_STATUS_TRANSITIONS,
+    StockConflictError,
+    VALID_RECEIPT_STATUSES,
+    add_receipt_audit_log,
+    apply_movement_filters,
+    build_receipt_id,
+    change_stock,
+    compute_requires_receipt_approval,
+    ensure_receipt_draft_control,
+    ensure_receipt_header,
+    get_receipt_items,
+    get_supplier_target_map,
+    lock_inventory_balances,
+    set_stock_quantity,
+    upsert_supplier_risk_snapshots,
+)
+from app.services.audit import record_audit_event
 from app.schemas.inventory import (
     InventoryAdjustmentCreate,
     InventoryBatchEntryCreate,
@@ -49,211 +67,32 @@ from app.schemas.inventory import (
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
-VALID_RECEIPT_STATUSES = {"draft", "posted", "checked", "canceled"}
-ALLOWED_RECEIPT_STATUS_TRANSITIONS = {
-    "draft": set(),
-    "posted": {"posted", "checked"},
-    "checked": {"checked", "posted"},
-    "canceled": set(),
-}
-RECEIPT_APPROVAL_THRESHOLD = 20
 
-
-def get_or_create_balance(db: Session, store_id, variant_id):
-    balance = (
-        db.query(InventoryBalance)
-        .filter(
-            InventoryBalance.store_id == store_id,
-            InventoryBalance.variant_id == variant_id,
-        )
-        .first()
-    )
-
-    if not balance:
-        balance = InventoryBalance(
-            store_id=store_id,
-            variant_id=variant_id,
-            on_hand_qty=0,
-            reserved_qty=0,
-        )
-        db.add(balance)
-        db.flush()
-
-    return balance
-
-
-def build_receipt_id(movement: StockMovement) -> str:
-    if movement.receipt_group_id:
-        return str(movement.receipt_group_id)
-    supplier = movement.supplier_reference or "-"
-    document = movement.document_reference or "-"
-    reason = movement.reason or "-"
-    return f"{movement.store_id}|{supplier}|{document}|{reason}"
-
-
-def ensure_receipt_header(
-    db: Session,
-    *,
-    receipt_id: uuid.UUID,
-    store_id: uuid.UUID,
-    supplier_reference: str | None,
-    document_reference: str | None,
-    reason: str | None,
-    created_by: uuid.UUID | None,
-):
-    receipt = db.query(InventoryReceipt).filter(InventoryReceipt.id == receipt_id).first()
-    if receipt:
-        return receipt
-
-    receipt = InventoryReceipt(
-        id=receipt_id,
-        store_id=store_id,
-        status="draft",
-        supplier_reference=supplier_reference,
-        document_reference=document_reference,
-        reason=reason,
-        created_by=created_by,
-    )
-    db.add(receipt)
-    db.flush()
-    return receipt
-
-
-def get_receipt_items(db: Session, receipt_id: uuid.UUID):
+def batch_receipt_matches_idempotent_request(
+    receipt: InventoryReceipt,
+    items: list[InventoryReceiptItem],
+    payload: InventoryBatchEntryCreate,
+) -> bool:
+    persisted_items = sorted((str(item.variant_id), item.quantity) for item in items)
+    requested_items = sorted((str(item.variant_id), item.quantity) for item in payload.items)
     return (
-        db.query(InventoryReceiptItem)
-        .filter(InventoryReceiptItem.receipt_id == receipt_id)
-        .order_by(InventoryReceiptItem.created_at.desc(), InventoryReceiptItem.id.desc())
-        .all()
+        receipt.supplier_reference == payload.supplier_reference
+        and receipt.document_reference == payload.document_reference
+        and receipt.reason == payload.reason
+        and persisted_items == requested_items
     )
 
 
-def add_receipt_audit_log(
-    db: Session,
-    *,
-    receipt_id: uuid.UUID,
-    action: str,
-    created_by: uuid.UUID | None,
-    details: str | None = None,
-):
-    db.add(
-        InventoryReceiptAuditLog(
-            receipt_id=receipt_id,
-            action=action,
-            details=details,
-            created_by=created_by,
+def ensure_matching_batch_receipt(
+    receipt: InventoryReceipt,
+    items: list[InventoryReceiptItem],
+    payload: InventoryBatchEntryCreate,
+) -> None:
+    if not batch_receipt_matches_idempotent_request(receipt, items, payload):
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency-Key ja foi usado com um recebimento diferente.",
         )
-    )
-
-
-def compute_requires_receipt_approval(items: list[InventoryReceiptItem] | list) -> bool:
-    return sum(int(item.quantity) for item in items) >= RECEIPT_APPROVAL_THRESHOLD
-
-
-def get_supplier_target_map(db: Session, store_id: uuid.UUID | None) -> dict[str, int]:
-    if store_id is None:
-        return {}
-    targets = (
-        db.query(InventorySupplierRiskTarget)
-        .filter(InventorySupplierRiskTarget.store_id == store_id)
-        .all()
-    )
-    return {item.supplier_reference: item.target_hours for item in targets}
-
-
-def upsert_supplier_risk_snapshots(
-    db: Session,
-    *,
-    store_id: uuid.UUID | None,
-    receipts: list[InventoryReceipt],
-    supplier_target_map: dict[str, int],
-):
-    if store_id is None:
-        return
-
-    today = datetime.now(timezone.utc).date()
-    grouped: dict[str, dict[str, int]] = {}
-    for receipt in receipts:
-        supplier = receipt.supplier_reference or "Nao informado"
-        if supplier not in grouped:
-            grouped[supplier] = {"open_critical_count": 0, "resolved_estimate_count": 0}
-        if receipt.status == "draft" and receipt.requires_approval and receipt.approved_by is None:
-            grouped[supplier]["open_critical_count"] += 1
-        else:
-            grouped[supplier]["resolved_estimate_count"] += 1
-
-    for supplier, values in grouped.items():
-        snapshot = (
-            db.query(InventorySupplierRiskSnapshot)
-            .filter(
-                InventorySupplierRiskSnapshot.store_id == store_id,
-                InventorySupplierRiskSnapshot.supplier_reference == supplier,
-                InventorySupplierRiskSnapshot.snapshot_date == today,
-            )
-            .first()
-        )
-        if not snapshot:
-            snapshot = InventorySupplierRiskSnapshot(
-                store_id=store_id,
-                supplier_reference=supplier,
-                snapshot_date=today,
-            )
-            db.add(snapshot)
-        snapshot.target_hours = supplier_target_map.get(supplier, 48)
-        snapshot.open_critical_count = values["open_critical_count"]
-        snapshot.resolved_estimate_count = values["resolved_estimate_count"]
-
-
-def ensure_receipt_draft_control(current_user: User, receipt: InventoryReceipt) -> None:
-    ensure_store_access(current_user, receipt.store_id)
-    if current_user.role in {"admin", "manager"}:
-        return
-    if current_user.role == "operator" and receipt.created_by == current_user.id:
-        return
-    raise HTTPException(
-        status_code=403,
-        detail="Usuario sem permissao para alterar este rascunho.",
-    )
-
-
-def apply_movement_filters(
-    query,
-    *,
-    current_user: User,
-    store_id: uuid.UUID | None,
-    variant_id: uuid.UUID | None,
-    movement_type: str | None,
-    reference_type: str | None,
-    supplier_reference: str | None,
-    document_reference: str | None,
-    created_from: date | None,
-    created_to: date | None,
-):
-    if store_id is not None:
-        ensure_store_access(current_user, store_id)
-        query = query.filter(StockMovement.store_id == store_id)
-    elif current_user.role != "admin":
-        query = query.filter(StockMovement.store_id == current_user.store_id)
-
-    if variant_id is not None:
-        query = query.filter(StockMovement.variant_id == variant_id)
-    if movement_type is not None:
-        query = query.filter(StockMovement.movement_type == movement_type)
-    if reference_type is not None:
-        query = query.filter(StockMovement.reference_type == reference_type)
-    if supplier_reference is not None:
-        query = query.filter(StockMovement.supplier_reference.ilike(f"%{supplier_reference.strip()}%"))
-    if document_reference is not None:
-        query = query.filter(StockMovement.document_reference.ilike(f"%{document_reference.strip()}%"))
-    if created_from is not None:
-        query = query.filter(
-            StockMovement.created_at >= datetime.combine(created_from, time.min, tzinfo=timezone.utc)
-        )
-    if created_to is not None:
-        query = query.filter(
-            StockMovement.created_at < datetime.combine(created_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
-        )
-    return query
 
 
 @router.get("/balances", response_model=list[InventoryBalanceResponse])
@@ -894,6 +733,19 @@ def create_receipt_draft(
         created_by=actor_id,
         details=payload.document_reference or payload.supplier_reference or payload.reason,
     )
+    record_audit_event(
+        db,
+        action="receipt.draft_created",
+        entity_type="receipt",
+        entity_id=receipt_id,
+        store_id=payload.store_id,
+        actor_id=actor_id,
+        metadata={
+            "item_count": len(payload.items),
+            "total_quantity": sum(item.quantity for item in payload.items),
+            "requires_approval": receipt.requires_approval,
+        },
+    )
     db.commit()
     return get_receipt_detail(receipt_id=str(receipt.id), db=db, current_user=current_user)
 
@@ -976,23 +828,26 @@ def post_receipt_draft(
     if not receipt_items:
         raise HTTPException(status_code=400, detail="Rascunho sem itens para efetivar.")
 
+    lock_inventory_balances(
+        db,
+        [(receipt.store_id, item.variant_id) for item in receipt_items],
+        create_if_missing=True,
+    )
     for item in receipt_items:
-        balance = get_or_create_balance(db, receipt.store_id, item.variant_id)
-        balance.on_hand_qty += item.quantity
-        db.add(
-            StockMovement(
-                store_id=receipt.store_id,
-                variant_id=item.variant_id,
-                movement_type="entry",
-                quantity_delta=item.quantity,
-                reference_type="receipt_post",
-                receipt_group_id=receipt_uuid,
-                reference_id=item.id,
-                supplier_reference=receipt.supplier_reference,
-                document_reference=receipt.document_reference,
-                reason=receipt.reason,
-                created_by=current_user.id,
-            )
+        change_stock(
+            db,
+            store_id=receipt.store_id,
+            variant_id=item.variant_id,
+            quantity_delta=item.quantity,
+            movement_type="entry",
+            reference_type="receipt_post",
+            receipt_group_id=receipt_uuid,
+            reference_id=item.id,
+            supplier_reference=receipt.supplier_reference,
+            document_reference=receipt.document_reference,
+            reason=receipt.reason,
+            created_by=current_user.id,
+            create_if_missing=True,
         )
 
     receipt.status = "posted"
@@ -1010,6 +865,18 @@ def post_receipt_draft(
         action="draft_posted",
         created_by=current_user.id,
         details=receipt.document_reference or receipt.supplier_reference or receipt.reason,
+    )
+    record_audit_event(
+        db,
+        action="receipt.posted",
+        entity_type="receipt",
+        entity_id=receipt_uuid,
+        store_id=receipt.store_id,
+        actor_id=current_user.id,
+        metadata={
+            "item_count": len(receipt_items),
+            "total_quantity": sum(item.quantity for item in receipt_items),
+        },
     )
     db.commit()
     return get_receipt_detail(receipt_id=receipt_id, db=db, current_user=current_user)
@@ -1042,6 +909,14 @@ def approve_receipt_draft(
         action="draft_approved",
         created_by=current_user.id,
         details=receipt.document_reference or receipt.supplier_reference or receipt.reason,
+    )
+    record_audit_event(
+        db,
+        action="receipt.approved",
+        entity_type="receipt",
+        entity_id=receipt_uuid,
+        store_id=receipt.store_id,
+        actor_id=current_user.id,
     )
     db.commit()
     return get_receipt_detail(receipt_id=receipt_id, db=db, current_user=current_user)
@@ -1113,6 +988,15 @@ def update_receipt_status(
         created_by=current_user.id,
         details=f"status={next_status}",
     )
+    record_audit_event(
+        db,
+        action="receipt.status_updated",
+        entity_type="receipt",
+        entity_id=receipt_uuid,
+        store_id=receipt.store_id,
+        actor_id=current_user.id,
+        metadata={"status": next_status},
+    )
     db.commit()
     return get_receipt_detail(receipt_id=receipt_id, db=db, current_user=current_user)
 
@@ -1153,27 +1037,18 @@ def cancel_receipt(
     if not movements:
         raise HTTPException(status_code=400, detail="Recebimento sem itens para cancelar.")
 
-    for movement in movements:
-        balance = db.execute(
-            select(InventoryBalance)
-            .where(
-                InventoryBalance.store_id == movement.store_id,
-                InventoryBalance.variant_id == movement.variant_id,
-            )
-            .with_for_update()
-        ).scalar_one_or_none()
-        if not balance or balance.on_hand_qty < movement.quantity_delta:
-            raise HTTPException(
-                status_code=409,
-                detail="Estoque insuficiente para cancelar o recebimento.",
-            )
-        balance.on_hand_qty -= movement.quantity_delta
-        db.add(
-            StockMovement(
+    try:
+        lock_inventory_balances(
+            db,
+            [(movement.store_id, movement.variant_id) for movement in movements],
+        )
+        for movement in movements:
+            change_stock(
+                db,
                 store_id=movement.store_id,
                 variant_id=movement.variant_id,
-                movement_type="reversal",
                 quantity_delta=-movement.quantity_delta,
+                movement_type="reversal",
                 reference_type="receipt_cancel",
                 receipt_group_id=receipt_uuid,
                 reference_id=movement.id,
@@ -1182,7 +1057,9 @@ def cancel_receipt(
                 reason="receipt_canceled",
                 created_by=current_user.id,
             )
-        )
+    except StockConflictError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Estoque insuficiente para cancelar o recebimento.") from exc
 
     receipt.status = "canceled"
     add_receipt_audit_log(
@@ -1191,6 +1068,15 @@ def cancel_receipt(
         action="receipt_canceled",
         created_by=current_user.id,
         details=receipt.document_reference or receipt.supplier_reference or receipt.reason,
+    )
+    record_audit_event(
+        db,
+        action="receipt.canceled",
+        entity_type="receipt",
+        entity_id=receipt_uuid,
+        store_id=receipt.store_id,
+        actor_id=current_user.id,
+        metadata={"movement_count": len(movements)},
     )
     db.commit()
     return get_receipt_detail(receipt_id=receipt_id, db=db, current_user=current_user)
@@ -1269,7 +1155,6 @@ def create_inventory_entry(
     receipt_group_id = uuid.uuid4()
     actor_id = payload.created_by or current_user.id
     ensure_store_access(current_user, payload.store_id)
-    balance = get_or_create_balance(db, payload.store_id, payload.variant_id)
     receipt = ensure_receipt_header(
         db,
         receipt_id=receipt_group_id,
@@ -1289,29 +1174,35 @@ def create_inventory_entry(
         )
     )
 
-    balance.on_hand_qty += payload.quantity
-
-    movement = StockMovement(
+    balance = change_stock(
+        db,
         store_id=payload.store_id,
         variant_id=payload.variant_id,
-        movement_type="entry",
         quantity_delta=payload.quantity,
+        movement_type="entry",
         reference_type="manual_entry",
         receipt_group_id=receipt_group_id,
-        reference_id=None,
         supplier_reference=payload.supplier_reference,
         document_reference=payload.document_reference,
         reason=payload.reason,
         created_by=actor_id,
+        create_if_missing=True,
     )
-
-    db.add(movement)
     add_receipt_audit_log(
         db,
         receipt_id=receipt_group_id,
         action="direct_receipt_created",
         created_by=actor_id,
         details=payload.document_reference or payload.supplier_reference or payload.reason,
+    )
+    record_audit_event(
+        db,
+        action="receipt.created",
+        entity_type="receipt",
+        entity_id=receipt_group_id,
+        store_id=payload.store_id,
+        actor_id=actor_id,
+        metadata={"item_count": 1, "total_quantity": payload.quantity},
     )
     try:
         db.commit()
@@ -1329,6 +1220,7 @@ def create_inventory_entry(
 @router.post("/entries", response_model=InventoryBatchEntryResponse)
 def create_inventory_batch_entry(
     payload: InventoryBatchEntryCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("admin", "manager", "operator")),
 ):
@@ -1336,6 +1228,26 @@ def create_inventory_batch_entry(
         raise HTTPException(status_code=400, detail="Informe ao menos um item para o recebimento.")
 
     ensure_store_access(current_user, payload.store_id)
+    if idempotency_key is not None:
+        idempotency_key = idempotency_key.strip()
+        if not idempotency_key or len(idempotency_key) > 120:
+            raise HTTPException(status_code=400, detail="Idempotency-Key deve ter entre 1 e 120 caracteres.")
+        existing_receipt = (
+            db.query(InventoryReceipt)
+            .filter(
+                InventoryReceipt.store_id == payload.store_id,
+                InventoryReceipt.idempotency_key == idempotency_key,
+            )
+            .first()
+        )
+        if existing_receipt:
+            existing_items = get_receipt_items(db, existing_receipt.id)
+            ensure_matching_batch_receipt(existing_receipt, existing_items, payload)
+            balances = lock_inventory_balances(
+                db,
+                [(payload.store_id, item.variant_id) for item in existing_items],
+            )
+            return {"store_id": payload.store_id, "balances": list(balances.values())}
     updated_balances: list[InventoryBalance] = []
 
     try:
@@ -1352,6 +1264,12 @@ def create_inventory_batch_entry(
         )
         receipt.status = "posted"
         receipt.notes = None
+        receipt.idempotency_key = idempotency_key
+        lock_inventory_balances(
+            db,
+            [(payload.store_id, item.variant_id) for item in payload.items],
+            create_if_missing=True,
+        )
         for item in payload.items:
             db.add(
                 InventoryReceiptItem(
@@ -1360,25 +1278,21 @@ def create_inventory_batch_entry(
                     quantity=item.quantity,
                 )
             )
-            balance = get_or_create_balance(db, payload.store_id, item.variant_id)
-            balance.on_hand_qty += item.quantity
-            updated_balances.append(balance)
-
-            db.add(
-                StockMovement(
-                    store_id=payload.store_id,
-                    variant_id=item.variant_id,
-                    movement_type="entry",
-                    quantity_delta=item.quantity,
-                    reference_type="batch_entry",
-                    receipt_group_id=receipt_group_id,
-                    reference_id=None,
-                    supplier_reference=payload.supplier_reference,
-                    document_reference=payload.document_reference,
-                    reason=payload.reason,
-                    created_by=actor_id,
-                )
+            balance = change_stock(
+                db,
+                store_id=payload.store_id,
+                variant_id=item.variant_id,
+                quantity_delta=item.quantity,
+                movement_type="entry",
+                reference_type="batch_entry",
+                receipt_group_id=receipt_group_id,
+                supplier_reference=payload.supplier_reference,
+                document_reference=payload.document_reference,
+                reason=payload.reason,
+                created_by=actor_id,
+                create_if_missing=True,
             )
+            updated_balances.append(balance)
         add_receipt_audit_log(
             db,
             receipt_id=receipt_group_id,
@@ -1386,10 +1300,39 @@ def create_inventory_batch_entry(
             created_by=actor_id,
             details=payload.document_reference or payload.supplier_reference or payload.reason,
         )
+        record_audit_event(
+            db,
+            action="receipt.created",
+            entity_type="receipt",
+            entity_id=receipt_group_id,
+            store_id=payload.store_id,
+            actor_id=actor_id,
+            metadata={
+                "item_count": len(payload.items),
+                "total_quantity": sum(item.quantity for item in payload.items),
+            },
+        )
 
         db.commit()
     except IntegrityError:
         db.rollback()
+        if idempotency_key:
+            existing_receipt = (
+                db.query(InventoryReceipt)
+                .filter(
+                    InventoryReceipt.store_id == payload.store_id,
+                    InventoryReceipt.idempotency_key == idempotency_key,
+                )
+                .first()
+            )
+            if existing_receipt:
+                existing_items = get_receipt_items(db, existing_receipt.id)
+                ensure_matching_batch_receipt(existing_receipt, existing_items, payload)
+                balances = lock_inventory_balances(
+                    db,
+                    [(payload.store_id, item.variant_id) for item in existing_items],
+                )
+                return {"store_id": payload.store_id, "balances": list(balances.values())}
         raise HTTPException(
             status_code=400,
             detail="Loja, variante ou usuario informado nao foi encontrado.",
@@ -1411,28 +1354,34 @@ def create_inventory_adjustment(
     current_user: User = Depends(require_roles("admin", "manager")),
 ):
     ensure_store_access(current_user, payload.store_id)
-    balance = get_or_create_balance(db, payload.store_id, payload.variant_id)
-
-    old_qty = balance.on_hand_qty
-    delta = payload.new_quantity - old_qty
+    balance, delta = set_stock_quantity(
+        db,
+        store_id=payload.store_id,
+        variant_id=payload.variant_id,
+        quantity=payload.new_quantity,
+        reference_type="manual_adjustment",
+        reason=payload.reason,
+        created_by=payload.created_by or current_user.id,
+    )
 
     if delta == 0:
         raise HTTPException(status_code=400, detail="O novo saldo e igual ao saldo atual.")
 
-    balance.on_hand_qty = payload.new_quantity
-
-    movement = StockMovement(
+    actor_id = payload.created_by or current_user.id
+    record_audit_event(
+        db,
+        action="inventory.adjusted",
+        entity_type="inventory_balance",
+        entity_id=balance.id,
         store_id=payload.store_id,
-        variant_id=payload.variant_id,
-        movement_type="adjustment",
-        quantity_delta=delta,
-        reference_type="manual_adjustment",
-        reference_id=None,
-        reason=payload.reason,
-        created_by=payload.created_by,
+        actor_id=actor_id,
+        metadata={
+            "variant_id": str(payload.variant_id),
+            "quantity_delta": delta,
+            "new_quantity": payload.new_quantity,
+        },
     )
 
-    db.add(movement)
     try:
         db.commit()
     except IntegrityError:
@@ -1462,72 +1411,63 @@ def create_inventory_transfer(
     ensure_store_access(current_user, payload.destination_store_id)
 
     try:
-        source_balance = db.execute(
-            select(InventoryBalance)
-            .where(
-                InventoryBalance.store_id == payload.source_store_id,
-                InventoryBalance.variant_id == payload.variant_id,
-            )
-            .with_for_update()
-        ).scalar_one_or_none()
-
-        if not source_balance or source_balance.on_hand_qty < payload.quantity:
-            raise HTTPException(
-                status_code=409,
-                detail="Estoque insuficiente na loja de origem para concluir a transferencia.",
-            )
-
-        destination_balance = (
-            db.execute(
-                select(InventoryBalance)
-                .where(
-                    InventoryBalance.store_id == payload.destination_store_id,
-                    InventoryBalance.variant_id == payload.variant_id,
-                )
-                .with_for_update()
-            ).scalar_one_or_none()
-        )
-        if not destination_balance:
-            destination_balance = get_or_create_balance(
-                db,
-                payload.destination_store_id,
-                payload.variant_id,
-            )
-
-        source_balance.on_hand_qty -= payload.quantity
-        destination_balance.on_hand_qty += payload.quantity
-
         actor_id = payload.created_by or current_user.id
-
-        db.add(
-            StockMovement(
-                store_id=payload.source_store_id,
-                variant_id=payload.variant_id,
-                movement_type="transfer_out",
-                quantity_delta=-payload.quantity,
-                reference_type="store_transfer",
-                reference_id=payload.destination_store_id,
-                reason=payload.reason,
-                created_by=actor_id,
-            )
+        lock_inventory_balances(
+            db,
+            [
+                (payload.source_store_id, payload.variant_id),
+                (payload.destination_store_id, payload.variant_id),
+            ],
+            create_if_missing=True,
         )
-        db.add(
-            StockMovement(
-                store_id=payload.destination_store_id,
-                variant_id=payload.variant_id,
-                movement_type="transfer_in",
-                quantity_delta=payload.quantity,
-                reference_type="store_transfer",
-                reference_id=payload.source_store_id,
-                reason=payload.reason,
-                created_by=actor_id,
-            )
+        source_balance = change_stock(
+            db,
+            store_id=payload.source_store_id,
+            variant_id=payload.variant_id,
+            quantity_delta=-payload.quantity,
+            movement_type="transfer_out",
+            reference_type="store_transfer",
+            reference_id=payload.destination_store_id,
+            reason=payload.reason,
+            created_by=actor_id,
+        )
+        destination_balance = change_stock(
+            db,
+            store_id=payload.destination_store_id,
+            variant_id=payload.variant_id,
+            quantity_delta=payload.quantity,
+            movement_type="transfer_in",
+            reference_type="store_transfer",
+            reference_id=payload.source_store_id,
+            reason=payload.reason,
+            created_by=actor_id,
+            create_if_missing=True,
+        )
+
+        record_audit_event(
+            db,
+            action="inventory.transferred",
+            entity_type="inventory_balance",
+            entity_id=source_balance.id,
+            store_id=payload.source_store_id,
+            actor_id=actor_id,
+            metadata={
+                "variant_id": str(payload.variant_id),
+                "destination_store_id": str(payload.destination_store_id),
+                "quantity": payload.quantity,
+            },
         )
 
         db.commit()
     except HTTPException:
         db.rollback()
         raise
+    except StockConflictError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Estoque insuficiente na loja de origem para concluir a transferencia.",
+        ) from exc
     except IntegrityError:
         db.rollback()
         raise HTTPException(

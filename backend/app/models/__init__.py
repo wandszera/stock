@@ -1,4 +1,6 @@
 from app.models.category import Category
+from app.models.audit import AuditEvent
+from app.models.analytics import ForecastBacktestRun, ReplenishmentRecommendation, SupplierDelivery, SupplierRiskScore
 from app.models.inventory import (
     InventoryBalance,
     InventoryReceiptAuditLog,

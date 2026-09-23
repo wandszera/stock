@@ -66,6 +66,7 @@ class StockMovement(Base):
     supplier_reference: Mapped[str | None] = mapped_column(String(160), nullable=True)
     document_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
@@ -80,6 +81,9 @@ class StockMovement(Base):
 
 class InventoryReceipt(Base):
     __tablename__ = "inventory_receipts"
+    __table_args__ = (
+        UniqueConstraint("store_id", "idempotency_key", name="uq_receipt_store_idempotency_key"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -92,6 +96,7 @@ class InventoryReceipt(Base):
     document_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     requires_approval: Mapped[bool] = mapped_column(default=False, nullable=False)
     approved_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True

@@ -46,6 +46,7 @@ pytest-cache-files-*/
 .env
 .env.*
 !.env.example
+production.env
 
 # Database files
 *.db
