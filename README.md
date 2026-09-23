@@ -227,6 +227,25 @@ GET   /replenishment/recommendations?store_id=<uuid>
 PATCH /replenishment/recommendations/{id}/decision
 ```
 
+### Decision Intelligence — simulador de cenários
+
+O simulador executa uma análise hipotética sem movimentar o estoque: aumenta ou
+reduz a demanda, acrescenta atraso de fornecedor e aplica um orçamento. Para
+cada variante, compara unidades projetadas em ruptura sob a política atual, a
+regra simples e o modelo recomendado.
+
+```text
+POST /scenarios/replenishment
+```
+
+### Acabamento operacional
+
+O painel web reúne o simulador, geração de recomendações com decisão humana e
+registro de entregas de fornecedores. Após informar uma entrega, o gestor pode
+atualizar o ranking de risco sem sair da interface. Para publicar, defina as
+variáveis em `backend/production.env`, execute o `docker compose` documentado
+acima e aplique as migrações na inicialização do serviço.
+
 ---
 
 ## 🧪 Running Automated Tests

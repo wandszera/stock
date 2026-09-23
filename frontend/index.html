@@ -276,6 +276,7 @@
       <section class="panel section-nav-panel">
         <div class="section-nav">
           <button class="ghost section-link" data-target="dashboard-section">Visao geral</button>
+          <button class="ghost section-link" data-target="decision-intelligence-section">Decisões</button>
           <button class="ghost section-link" data-target="operations-section">Operacao</button>
           <button class="ghost section-link" data-target="sales-section">Comercial</button>
           <button class="ghost section-link" data-target="catalog-section">Catalogo e analise</button>
@@ -284,6 +285,37 @@
       </section>
 
       <section id="executive-strip" class="executive-strip"></section>
+
+      <section id="decision-intelligence-section" class="panel data-panel wide">
+        <div class="panel-head"><div><span class="eyebrow">Decision Intelligence</span><h2>Simulador de reposição</h2></div><button id="run-scenario-button" type="button">Simular cenário</button></div>
+        <p class="panel-copy">Compare a política atual, a regra simples e a recomendação sob mudanças de demanda, prazo e orçamento.</p>
+        <div class="filter-grid compact"><label>Demanda <input id="scenario-demand-multiplier" type="number" min="0.1" max="5" step="0.1" value="1"></label><label>Atraso (semanas) <input id="scenario-delay-weeks" type="number" min="0" max="12" value="0"></label><label>Orçamento <input id="scenario-budget" type="number" min="0" step="0.01" placeholder="Sem limite"></label></div>
+        <p id="scenario-status" class="status muted">Entre para simular cenários com os saldos e vendas reais da loja.</p>
+        <div id="scenario-summary" class="summary-grid"></div><div id="scenario-list" class="list"></div>
+      </section>
+
+      <section class="panel data-panel wide">
+        <div class="panel-head"><div><span class="eyebrow">Ação recomendada</span><h2>Plano de reposição</h2></div><button id="run-replenishment-button" type="button">Gerar recomendações</button></div>
+        <div class="filter-grid compact"><label>Prazo (semanas) <input id="replenishment-lead-time" type="number" min="1" max="12" value="2"></label><label>Estoque mínimo <input id="replenishment-minimum-stock" type="number" min="0" value="0"></label><label>Orçamento <input id="replenishment-budget" type="number" min="0" step="0.01" placeholder="Sem limite"></label></div>
+        <p id="replenishment-status" class="status muted">Gere recomendações para revisar e decidir item a item.</p>
+        <div id="replenishment-list" class="list"></div>
+      </section>
+
+      <section class="panel data-panel wide">
+        <div class="panel-head"><div><span class="eyebrow">Fornecedores</span><h2>Registro e risco</h2></div><button id="run-supplier-risk-button" type="button">Atualizar ranking</button></div>
+        <div class="filter-grid compact">
+          <label>Fornecedor <input id="supplier-reference" type="text" placeholder="Nome ou referência"></label>
+          <label>Pedido <input id="supplier-ordered-at" type="date"></label>
+          <label>Previsão <input id="supplier-expected-at" type="date"></label>
+          <label>Entrega <input id="supplier-delivered-at" type="date"></label>
+          <label>Recebido <input id="supplier-received-quantity" type="number" min="0" value="0"></label>
+          <label>Defeitos <input id="supplier-defective-quantity" type="number" min="0" value="0"></label>
+          <label>Custo <input id="supplier-purchase-cost" type="number" min="0" step="0.01" value="0"></label>
+        </div>
+        <div class="action-row"><button id="save-supplier-delivery-button" type="button" class="ghost">Registrar entrega</button></div>
+        <p id="supplier-intelligence-status" class="status muted">Registre entregas para calcular atraso, variabilidade, defeitos e concentração.</p>
+        <div id="supplier-risk-list" class="list"></div>
+      </section>
 
       <section id="dashboard-section" class="analytics-grid">
         <section class="panel analytics-panel wide">

@@ -9,6 +9,7 @@ from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.inventory import router as inventory_router
 from app.api.routes.products import router as products_router
 from app.api.routes.replenishment import router as replenishment_router
+from app.api.routes.scenarios import router as scenarios_router
 from app.api.routes.variants import router as variants_router
 from app.api.routes.sales import router as sales_router
 from app.api.routes.stores import router as stores_router
@@ -33,3 +34,4 @@ api_router.include_router(counts_router)
 api_router.include_router(sales_router)
 api_router.include_router(supplier_intelligence_router)
 api_router.include_router(replenishment_router)
+api_router.include_router(scenarios_router)

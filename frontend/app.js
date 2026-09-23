@@ -428,6 +428,30 @@ const elements = {
   dailySalesCount: document.getElementById("daily-sales-count"),
   topVariantsCount: document.getElementById("top-variants-count"),
   salesStatus: document.getElementById("sales-status"),
+  runScenarioButton: document.getElementById("run-scenario-button"),
+  scenarioDemandMultiplier: document.getElementById("scenario-demand-multiplier"),
+  scenarioDelayWeeks: document.getElementById("scenario-delay-weeks"),
+  scenarioBudget: document.getElementById("scenario-budget"),
+  scenarioStatus: document.getElementById("scenario-status"),
+  scenarioSummary: document.getElementById("scenario-summary"),
+  scenarioList: document.getElementById("scenario-list"),
+  runReplenishmentButton: document.getElementById("run-replenishment-button"),
+  replenishmentLeadTime: document.getElementById("replenishment-lead-time"),
+  replenishmentMinimumStock: document.getElementById("replenishment-minimum-stock"),
+  replenishmentBudget: document.getElementById("replenishment-budget"),
+  replenishmentStatus: document.getElementById("replenishment-status"),
+  replenishmentList: document.getElementById("replenishment-list"),
+  runSupplierRiskButton: document.getElementById("run-supplier-risk-button"),
+  saveSupplierDeliveryButton: document.getElementById("save-supplier-delivery-button"),
+  supplierReference: document.getElementById("supplier-reference"),
+  supplierOrderedAt: document.getElementById("supplier-ordered-at"),
+  supplierExpectedAt: document.getElementById("supplier-expected-at"),
+  supplierDeliveredAt: document.getElementById("supplier-delivered-at"),
+  supplierReceivedQuantity: document.getElementById("supplier-received-quantity"),
+  supplierDefectiveQuantity: document.getElementById("supplier-defective-quantity"),
+  supplierPurchaseCost: document.getElementById("supplier-purchase-cost"),
+  supplierIntelligenceStatus: document.getElementById("supplier-intelligence-status"),
+  supplierRiskList: document.getElementById("supplier-risk-list"),
 };
 
 const workspaceMeta = {
@@ -864,6 +888,107 @@ function formatCurrency(value) {
     style: "currency",
     currency: "BRL",
   });
+}
+
+function setScenarioStatus(message, tone = "muted") {
+  elements.scenarioStatus.textContent = message;
+  elements.scenarioStatus.className = `status ${tone}`;
+}
+
+function renderScenario(data) {
+  elements.scenarioSummary.innerHTML = [["Política atual", data.total_current_policy_stockout], ["Regra simples", data.total_simple_rule_stockout], ["Modelo", data.total_model_stockout]].map(([label, value]) => `<div class="summary-card"><span>${label}</span><strong>${value}</strong><small>unidades em ruptura</small></div>`).join("");
+  elements.scenarioList.innerHTML = data.items.map((item) => `<div class="list-item"><strong>${item.variant_id}</strong><span>Recomendação: ${item.recommended_quantity} unidades · ${formatCurrency(item.planned_cost)}</span><span>${item.explanation}</span></div>`).join("") || '<div class="list-item"><span>Nenhum item para simular.</span></div>';
+}
+
+async function runScenario() {
+  if (!state.token) return setScenarioStatus("Entre para simular um cenário com dados reais.");
+  const storeId = elements.storeFilter.value || state.currentUser?.store_id;
+  if (!storeId) return setScenarioStatus("Selecione uma loja antes de simular.", "error");
+  const budget = elements.scenarioBudget.value.trim();
+  try {
+    const response = await apiFetch("/scenarios/replenishment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ store_id: storeId, demand_multiplier: Number(elements.scenarioDemandMultiplier.value || 1), supplier_delay_weeks: Number(elements.scenarioDelayWeeks.value || 0), ...(budget ? { budget_limit: Number(budget) } : {}) }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Não foi possível simular o cenário.");
+    renderScenario(data); setScenarioStatus("Cenário atualizado com os dados atuais da loja.", "success");
+  } catch (error) { setScenarioStatus(error.message || "Falha de comunicação ao simular o cenário.", "error"); }
+}
+
+function setReplenishmentStatus(message, tone = "muted") {
+  elements.replenishmentStatus.textContent = message;
+  elements.replenishmentStatus.className = `status ${tone}`;
+}
+
+function renderReplenishment(items) {
+  elements.replenishmentList.innerHTML = items.map((item) => `<div class="list-item"><strong>${item.variant_id}</strong><span>Atual: ${item.current_quantity} · Regra simples: ${item.simple_rule_quantity} · Modelo: ${item.recommended_quantity}</span><span>${item.explanation}</span><div class="action-row"><button type="button" class="ghost replenishment-decision" data-id="${item.id}" data-action="approved">Aprovar</button><button type="button" class="ghost replenishment-decision" data-id="${item.id}" data-action="rejected">Rejeitar</button><button type="button" class="ghost replenishment-decision" data-id="${item.id}" data-action="overridden">Ajustar</button></div></div>`).join("") || '<div class="list-item"><span>Nenhuma recomendação gerada.</span></div>';
+}
+
+async function runReplenishment() {
+  if (!state.token) return setReplenishmentStatus("Entre para gerar recomendações com dados reais.");
+  const storeId = elements.storeFilter.value || state.currentUser?.store_id;
+  if (!storeId) return setReplenishmentStatus("Selecione uma loja antes de gerar recomendações.", "error");
+  const budget = elements.replenishmentBudget.value.trim();
+  try {
+    const response = await apiFetch("/replenishment/recommendations/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ store_id: storeId, lead_time_weeks: Number(elements.replenishmentLeadTime.value || 2), minimum_stock: Number(elements.replenishmentMinimumStock.value || 0), ...(budget ? { budget_limit: Number(budget) } : {}) }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Não foi possível gerar as recomendações.");
+    renderReplenishment(data.items); setReplenishmentStatus("Recomendações atualizadas. Revise cada item antes de confirmar.", "success");
+  } catch (error) { setReplenishmentStatus(error.message || "Falha de comunicação ao gerar recomendações.", "error"); }
+}
+
+async function decideReplenishment(button) {
+  const status = button.dataset.action;
+  let approvedQuantity;
+  if (status === "overridden") {
+    const value = window.prompt("Quantidade aprovada:");
+    if (value === null) return;
+    approvedQuantity = Number(value);
+    if (!Number.isInteger(approvedQuantity) || approvedQuantity < 0) return setReplenishmentStatus("Informe uma quantidade inteira igual ou maior que zero.", "error");
+  }
+  try {
+    const response = await apiFetch(`/replenishment/recommendations/${button.dataset.id}/decision`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, ...(status === "overridden" ? { approved_quantity: approvedQuantity } : {}) }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Não foi possível registrar a decisão.");
+    setReplenishmentStatus(`Decisão registrada: ${data.status}.`, "success");
+    await runReplenishment();
+  } catch (error) { setReplenishmentStatus(error.message || "Falha de comunicação ao registrar a decisão.", "error"); }
+}
+
+function setSupplierIntelligenceStatus(message, tone = "muted") {
+  elements.supplierIntelligenceStatus.textContent = message;
+  elements.supplierIntelligenceStatus.className = `status ${tone}`;
+}
+
+function getSelectedStoreId() {
+  return elements.storeFilter.value || state.currentUser?.store_id;
+}
+
+function renderSupplierRisk(items) {
+  elements.supplierRiskList.innerHTML = items.map((item) => `<div class="list-item"><strong>${item.supplier_reference} · ${item.risk_level}</strong><span>Score: ${item.score} · ${item.delivery_count} entrega(s)</span><span>${item.explanation}</span></div>`).join("") || '<div class="list-item"><span>Nenhum risco calculado para esta loja.</span></div>';
+}
+
+async function refreshSupplierRisk() {
+  if (!state.token) return setSupplierIntelligenceStatus("Entre para consultar riscos reais.");
+  const storeId = getSelectedStoreId();
+  if (!storeId) return setSupplierIntelligenceStatus("Selecione uma loja antes de atualizar o ranking.", "error");
+  try {
+    const scored = await apiFetch("/supplier-intelligence/scores/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ store_id: storeId }) });
+    const data = await scored.json();
+    if (!scored.ok) throw new Error(data.detail || "Não foi possível calcular o risco.");
+    renderSupplierRisk(data.items); setSupplierIntelligenceStatus("Ranking atualizado com base nas entregas registradas.", "success");
+  } catch (error) { setSupplierIntelligenceStatus(error.message || "Falha de comunicação ao atualizar o ranking.", "error"); }
+}
+
+async function saveSupplierDelivery() {
+  const storeId = getSelectedStoreId();
+  const received = Number(elements.supplierReceivedQuantity.value || 0);
+  if (!state.token) return setSupplierIntelligenceStatus("Entre para registrar entregas reais.");
+  if (!storeId || !elements.supplierReference.value.trim() || !elements.supplierOrderedAt.value || !elements.supplierExpectedAt.value || !elements.supplierDeliveredAt.value || received <= 0) return setSupplierIntelligenceStatus("Preencha fornecedor, datas e quantidade recebida.", "error");
+  try {
+    const response = await apiFetch("/supplier-intelligence/deliveries", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ store_id: storeId, supplier_reference: elements.supplierReference.value.trim(), ordered_at: elements.supplierOrderedAt.value, expected_at: elements.supplierExpectedAt.value, delivered_at: elements.supplierDeliveredAt.value, ordered_quantity: received, received_quantity: received, defective_quantity: Number(elements.supplierDefectiveQuantity.value || 0), purchase_cost: Number(elements.supplierPurchaseCost.value || 0) }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Não foi possível registrar a entrega.");
+    setSupplierIntelligenceStatus("Entrega registrada. Atualize o ranking para recalcular o risco.", "success");
+  } catch (error) { setSupplierIntelligenceStatus(error.message || "Falha de comunicação ao registrar a entrega.", "error"); }
 }
 
 function getOperationIdempotencyKey(stateField) {
@@ -3867,6 +3992,15 @@ document.querySelectorAll("[data-target]").forEach((button) => {
       setTimeout(() => scrollToTarget(button.dataset.target), 50);
     }
   });
+});
+
+elements.runScenarioButton.addEventListener("click", runScenario);
+elements.runReplenishmentButton.addEventListener("click", runReplenishment);
+elements.runSupplierRiskButton.addEventListener("click", refreshSupplierRisk);
+elements.saveSupplierDeliveryButton.addEventListener("click", saveSupplierDelivery);
+elements.replenishmentList.addEventListener("click", (event) => {
+  const button = event.target.closest(".replenishment-decision");
+  if (button) decideReplenishment(button);
 });
 
 restorePreferences();
